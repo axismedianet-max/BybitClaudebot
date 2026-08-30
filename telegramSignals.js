@@ -8,8 +8,8 @@ const fs = require('fs');
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const API_ID   = 37743995;
-const API_HASH = '7e54718f33aa3e803cb66b09a17404bd';
+const API_ID   = parseInt(process.env.TELEGRAM_API_ID || '0');
+const API_HASH = process.env.TELEGRAM_API_HASH || '';
 const LEVERAGE = 20;
 const RECV_WINDOW = 5000;
 
@@ -18,10 +18,15 @@ const API_SECRET = process.env.BYBIT_API_SECRET;
 const SESSION_FILE = require('path').join(__dirname, 'telegram_session.txt');
 
 // ─── Session persistence ──────────────────────────────────────────────────────
+// In the cloud there is no stdin to type a login code into, so the session
+// string is supplied via TELEGRAM_SESSION. Locally it falls back to the file.
 function loadSession() {
+  if (process.env.TELEGRAM_SESSION) return process.env.TELEGRAM_SESSION.trim();
   try { return fs.readFileSync(SESSION_FILE, 'utf8').trim(); } catch { return ''; }
 }
-function saveSession(str) { fs.writeFileSync(SESSION_FILE, str); }
+function saveSession(str) {
+  try { fs.writeFileSync(SESSION_FILE, str); } catch {}
+}
 
 // ─── Parse signal ─────────────────────────────────────────────────────────────
 function parseSignal(text) {
@@ -156,6 +161,12 @@ async function executeTrade(sig) {
   console.log('📡 BybitClaudebot — Telegram Signal Listener');
   console.log(`   Leverage: ${LEVERAGE}x\n`);
 
+  if (!API_ID || !API_HASH) {
+    console.error('❌ TELEGRAM_API_ID / TELEGRAM_API_HASH missing from .env');
+    process.exit(1);
+  }
+
+  const hadSession = !!loadSession();
   const session = new StringSession(loadSession());
   const client  = new TelegramClient(session, API_ID, API_HASH, { connectionRetries: 5 });
 
@@ -166,8 +177,17 @@ async function executeTrade(sig) {
     onError:      (err) => console.error('Auth error:', err),
   });
 
-  saveSession(client.session.save());
+  const sessionString = client.session.save();
+  saveSession(sessionString);
   console.log('✅ Logged in to Telegram\n');
+
+  if (!hadSession) {
+    console.log('━'.repeat(70));
+    console.log('TELEGRAM_SESSION — copy this into Railway as an environment variable');
+    console.log('so the cloud deploy can log in without a phone code:\n');
+    console.log(sessionString);
+    console.log('━'.repeat(70) + '\n');
+  }
   console.log('👂 Listening for signals in all channels...\n');
 
   client.addEventHandler(async (event) => {
