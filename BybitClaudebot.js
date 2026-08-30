@@ -370,16 +370,31 @@ async function updateOpenTrades(state) {
 
 // ─── Scan for signals and place orders ────────────────────────────────────────
 async function scanSignals(state, balance) {
-  if (state.openTrades.length >= MAX_POSITIONS) {
-    console.log(`  ⏸️  At max positions (${MAX_POSITIONS}/${MAX_POSITIONS}) — waiting for closes`);
+  // Bybit is the source of truth for the position count, not our local state
+  // file: telegramSignals.js trades the same account and its positions are
+  // invisible here. Counting locally would let the two services jointly exceed
+  // MAX_POSITIONS. Fail closed if the account cannot be read.
+  const livePositions = await fetchBybitPositions();
+  if (!livePositions) {
+    console.log('  ⛔ Cannot read open positions — skipping scan for safety');
+    return;
+  }
+  const liveSymbols = Object.keys(livePositions);
+  let openCount = liveSymbols.length;
+
+  if (openCount >= MAX_POSITIONS) {
+    console.log(`  ⏸️  At max positions (${openCount}/${MAX_POSITIONS}) — waiting for closes`);
     return;
   }
 
   for (const symbol of PAIRS) {
-    if (state.openTrades.length >= MAX_POSITIONS) break;
+    if (openCount >= MAX_POSITIONS) break;
+
+    // Never stack onto a symbol already held, whoever opened it
+    if (liveSymbols.includes(symbol)) continue;
 
     for (const tf of TIMEFRAMES) {
-      if (state.openTrades.length >= MAX_POSITIONS) break;
+      if (openCount >= MAX_POSITIONS) break;
 
       const alreadyOpen = state.openTrades.find(t => t.symbol === symbol && t.intervalRaw === tf);
       if (alreadyOpen) continue;
@@ -399,8 +414,11 @@ async function scanSignals(state, balance) {
       const takeProfit  = roundPrice(entryPrice * (1 + TAKE_PROFIT_PCT), symbol);
       const stopLoss    = roundPrice(entryPrice * (1 - STOP_LOSS_PCT), symbol);
 
-      // Position sizing: full balance × leverage as notional, minimum $45
-      const positionUSDT = Math.max(45, balance * LEVERAGE);
+      // One slot's worth of margin, levered up. Dividing by MAX_POSITIONS is what
+      // lets all slots actually fit: margin used = notional / LEVERAGE, so sizing a
+      // single trade at balance * LEVERAGE would consume the whole balance as margin
+      // and every later signal would fail on insufficient funds.
+      const positionUSDT = Math.max(45, (balance / MAX_POSITIONS) * LEVERAGE);
       if (positionUSDT < 5) continue; // Bybit minimum order value
       const rawQty  = positionUSDT / entryPrice;
       const qty     = roundQty(rawQty, symbol);
@@ -443,6 +461,8 @@ async function scanSignals(state, balance) {
 
       state.openTrades.push(trade);
       state.signals.push({ id: candleId, time: trade.entryTime });
+      liveSymbols.push(symbol);
+      openCount++;
 
       console.log(`  🟢 BOUGHT  ${symbol} ${tf}m | Entry ~$${entryPrice.toFixed(5)} | TP $${takeProfit} | SL $${stopLoss} | Qty: ${qty} | Notional: $${positionUSDT.toFixed(2)}`);
     }
