@@ -1,4 +1,12 @@
 {
+  "name": "bybitclaudebot",
+  "version": "1.0.0",
+  "private": true,
+  "main": "BybitClaudebot.js",
+  "scripts": {
+    "start": "node BybitClaudebot.js",
+    "telegram": "node telegramSignals.js"
+  },
   "dependencies": {
     "dotenv": "^17.4.2",
     "https-proxy-agent": "^5.0.1",
