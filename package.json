@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "https-proxy-agent": "^5.0.1",
+    "input": "^1.0.1",
+    "telegram": "^2.26.22"
+  }
+}

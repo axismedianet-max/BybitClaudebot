@@ -1,0 +1,21 @@
+# Secrets — never commit
+.env
+*.env.txt
+cdp_api_key.json
+telegram_session.txt
+
+# Runtime state
+live_trades.json
+live_data.js
+telegram_state.json
+
+# Dependencies
+node_modules/
+
+# OS / editor junk
+.DS_Store
+*.png
+*.jpg
+
+# Scratch
+*copy*
