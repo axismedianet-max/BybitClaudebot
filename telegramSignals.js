@@ -10,8 +10,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 // ─── Config ───────────────────────────────────────────────────────────────────
 const API_ID   = parseInt(process.env.TELEGRAM_API_ID || '0');
 const API_HASH = process.env.TELEGRAM_API_HASH || '';
-const LEVERAGE = 20;
-const RECV_WINDOW = 5000;
+const LEVERAGE      = 20;
+const MAX_POSITIONS = 3;    // matches BybitClaudebot.js — counted live from Bybit
+const RECV_WINDOW   = 5000;
 
 const API_KEY    = process.env.BYBIT_API_KEY;
 const API_SECRET = process.env.BYBIT_API_SECRET;
@@ -115,9 +116,39 @@ async function setLeverage(symbol) {
   } catch {}
 }
 
+// ─── Open positions currently held on Bybit ───────────────────────────────────
+async function fetchOpenPositions() {
+  const r = await apiGet('/v5/position/list?category=linear&settleCoin=USDT&limit=200');
+  if (r.retCode !== 0) throw new Error(r.retMsg || 'position list failed');
+  return (r.result?.list || [])
+    .filter(p => parseFloat(p.size) > 0)
+    .map(p => p.symbol);
+}
+
 // ─── Execute trade ────────────────────────────────────────────────────────────
 async function executeTrade(sig) {
   console.log(`\n📡 Signal: ${sig.symbol} ${sig.side}  TP:${sig.takeProfit}  SL:${sig.stopLoss}`);
+
+  // Bybit is the source of truth for how many positions are open. If this call
+  // fails we skip the trade rather than risk stacking on an unknown position.
+  let openSymbols;
+  try {
+    openSymbols = await fetchOpenPositions();
+  } catch (e) {
+    console.log(`  ⛔ Cannot read open positions (${e.message}) — skipping for safety`);
+    return;
+  }
+
+  if (openSymbols.includes(sig.symbol)) {
+    console.log(`  ⏭️  Already holding ${sig.symbol} — skipping duplicate`);
+    return;
+  }
+
+  if (openSymbols.length >= MAX_POSITIONS) {
+    console.log(`  ⏸️  At max positions (${openSymbols.length}/${MAX_POSITIONS}) — skipping`);
+    console.log(`      Holding: ${openSymbols.join(', ')}`);
+    return;
+  }
 
   const [balance, price, info] = await Promise.all([
     getBalance(), getPrice(sig.symbol), getInstrumentInfo(sig.symbol),
@@ -126,7 +157,11 @@ async function executeTrade(sig) {
   if (!price) { console.log('  ⚠️  Could not get price — skipping'); return; }
   if (!info)  { console.log('  ⚠️  Unknown symbol — skipping'); return; }
 
-  const notional = Math.max(45, balance * LEVERAGE);
+  // One slot's worth of margin, levered up. Dividing by MAX_POSITIONS is what
+  // lets all slots actually fit: margin used = notional / LEVERAGE, so sizing a
+  // single trade at balance * LEVERAGE would consume the whole balance as margin
+  // and every later signal would fail on insufficient funds.
+  const notional = Math.max(45, (balance / MAX_POSITIONS) * LEVERAGE);
   const qty      = roundQty(notional / price, info.qtyStep);
 
   if (qty < info.minOrderQty || qty <= 0) {
@@ -159,7 +194,7 @@ async function executeTrade(sig) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 (async () => {
   console.log('📡 BybitClaudebot — Telegram Signal Listener');
-  console.log(`   Leverage: ${LEVERAGE}x\n`);
+  console.log(`   Leverage: ${LEVERAGE}x  |  Max ${MAX_POSITIONS} positions\n`);
 
   if (!API_ID || !API_HASH) {
     console.error('❌ TELEGRAM_API_ID / TELEGRAM_API_HASH missing from .env');
