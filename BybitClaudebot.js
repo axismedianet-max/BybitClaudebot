@@ -194,20 +194,32 @@ function generateSignal(candles) {
 }
 
 // ─── Round qty to instrument step ─────────────────────────────────────────────
+// Decimal places in a tick/step size. Must handle exponential notation: small
+// ticks stringify as "1e-7", which has no ".", so naive splitting yields 0
+// decimals and toFixed(0) collapses sub-penny prices to zero.
+function decimalsOf(n) {
+  const s = n.toString();
+  const e = s.indexOf('e-');
+  if (e !== -1) {
+    const mantissa = s.slice(0, e);
+    const exponent = parseInt(s.slice(e + 2), 10);
+    return exponent + (mantissa.split('.')[1] || '').length;
+  }
+  return (s.split('.')[1] || '').length;
+}
+
 function roundQty(qty, symbol) {
   const info = instrumentCache[symbol];
   if (!info) return +qty.toFixed(3);
   const step = info.qtyStep;
-  const decimals = step.toString().includes('.') ? step.toString().split('.')[1].length : 0;
-  return +(Math.floor(qty / step) * step).toFixed(decimals);
+  return +(Math.floor(qty / step) * step).toFixed(decimalsOf(step));
 }
 
 function roundPrice(price, symbol) {
   const info = instrumentCache[symbol];
   if (!info) return +price.toFixed(4);
   const tick = info.priceTick;
-  const decimals = tick.toString().includes('.') ? tick.toString().split('.')[1].length : 0;
-  return +(Math.round(price / tick) * tick).toFixed(decimals);
+  return +(Math.round(price / tick) * tick).toFixed(decimalsOf(tick));
 }
 
 // ─── Get USDT balance ─────────────────────────────────────────────────────────
@@ -316,6 +328,24 @@ async function fetchBybitPositions() {
   } catch { return null; }
 }
 
+// ─── Bybit's own record of what a closed position actually made ───────────────
+async function fetchClosedPnl(symbol, sinceMs) {
+  try {
+    const r = await apiGet(`/v5/position/closed-pnl?category=linear&symbol=${symbol}&limit=50`);
+    if (r.retCode !== 0) return null;
+    const rows = (r.result?.list || [])
+      .filter(x => parseInt(x.updatedTime) >= sinceMs - 60000)
+      .sort((a, b) => parseInt(b.updatedTime) - parseInt(a.updatedTime));
+    if (!rows.length) return null;
+    const row = rows[0];
+    return {
+      pnl:       parseFloat(row.closedPnl),
+      exitPrice: parseFloat(row.avgExitPrice),
+      exitTime:  new Date(parseInt(row.updatedTime)).toISOString(),
+    };
+  } catch { return null; }
+}
+
 // ─── Check open positions against Bybit reality ───────────────────────────────
 async function updateOpenTrades(state) {
   const bybitPositions = await fetchBybitPositions();
@@ -325,17 +355,31 @@ async function updateOpenTrades(state) {
 
     // ── Position closed by Bybit TP/SL since last cycle ──────────────────────
     if (bybitPositions && nowOnBybit === 0) {
-      // Determine win or loss by comparing last price to entry
-      const candles = await fetchCandles(trade.symbol, trade.intervalRaw, 2);
-      const lastPrice = candles?.length ? parseFloat(candles[candles.length - 1][4]) : null;
-      const outcome = lastPrice && lastPrice >= trade.takeProfit ? 'win'
-                    : lastPrice && lastPrice <= trade.stopLoss   ? 'loss'
-                    : 'win'; // TP/SL fired — assume TP if ambiguous (Bybit closed it)
-      const exitPrice = outcome === 'win' ? trade.takeProfit : trade.stopLoss;
-      const pnl = (exitPrice - trade.entryPrice) * trade.qty;
-      const emoji = outcome === 'win' ? '✅' : '❌';
-      console.log(`  ${emoji} ${trade.symbol} ${trade.timeframe} closed by Bybit | ${outcome.toUpperCase()} | PnL: $${pnl.toFixed(4)}`);
-      state.closedTrades.push({ ...trade, outcome, exitPrice: +exitPrice.toFixed(6), exitTime: new Date().toISOString(), pnl: +pnl.toFixed(4) });
+      // Use Bybit's realised PnL rather than inferring one. Guessing the exit
+      // from the last candle recorded fabricated results: an ambiguous close
+      // was assumed to be a win at the TP price, so a position that actually
+      // closed at a loss was booked as a profit at a price it never traded.
+      const real = await fetchClosedPnl(trade.symbol, new Date(trade.entryTime).getTime());
+
+      if (real) {
+        const outcome = real.pnl > 0 ? 'win' : real.pnl < 0 ? 'loss' : 'breakeven';
+        const emoji   = real.pnl > 0 ? '✅' : real.pnl < 0 ? '❌' : '➖';
+        console.log(`  ${emoji} ${trade.symbol} ${trade.timeframe} closed | ${outcome.toUpperCase()} | PnL: $${real.pnl.toFixed(4)} @ ${real.exitPrice}`);
+        state.closedTrades.push({
+          ...trade, outcome,
+          exitPrice: real.exitPrice,
+          exitTime:  real.exitTime,
+          pnl:       +real.pnl.toFixed(4),
+        });
+      } else {
+        // Ground truth unavailable — record the close without inventing a number
+        console.log(`  ⚠️  ${trade.symbol} closed but PnL unavailable from Bybit — recorded as unknown`);
+        state.closedTrades.push({
+          ...trade, outcome: 'unknown',
+          exitTime: new Date().toISOString(),
+          pnl: null,
+        });
+      }
       state.openTrades = state.openTrades.filter(t => t.id !== trade.id);
       continue;
     }
@@ -421,6 +465,13 @@ async function scanSignals(state, balance) {
       const entryPrice  = parseFloat(lastClosed[4]);
       const takeProfit  = roundPrice(entryPrice * (1 + TAKE_PROFIT_PCT), symbol);
       const stopLoss    = roundPrice(entryPrice * (1 - STOP_LOSS_PCT), symbol);
+
+      // Never send a zero or inverted TP/SL. A rounding fault here previously
+      // sent takeProfit:0 on sub-penny coins, leaving positions with no exit.
+      if (!(takeProfit > entryPrice) || !(stopLoss > 0) || !(stopLoss < entryPrice)) {
+        console.log(`  ⚠️  Bad TP/SL for ${symbol} (entry ${entryPrice}, TP ${takeProfit}, SL ${stopLoss}) — skipping`);
+        continue;
+      }
 
       // One slot's worth of margin, levered up. Dividing by MAX_POSITIONS is what
       // lets all slots actually fit: margin used = notional / LEVERAGE, so sizing a

@@ -102,9 +102,22 @@ async function getInstrumentInfo(symbol) {
   };
 }
 
+// Must handle exponential notation: a small step stringifies as "1e-7", which
+// has no ".", so naive splitting yields 0 decimals and toFixed(0) collapses the
+// value to zero.
+function decimalsOf(n) {
+  const s = n.toString();
+  const e = s.indexOf('e-');
+  if (e !== -1) {
+    const mantissa = s.slice(0, e);
+    const exponent = parseInt(s.slice(e + 2), 10);
+    return exponent + (mantissa.split('.')[1] || '').length;
+  }
+  return (s.split('.')[1] || '').length;
+}
+
 function roundQty(qty, step) {
-  const dec = (step.toString().split('.')[1] || '').length;
-  return parseFloat((Math.floor(qty / step) * step).toFixed(dec));
+  return parseFloat((Math.floor(qty / step) * step).toFixed(decimalsOf(step)));
 }
 
 async function setLeverage(symbol) {
@@ -156,6 +169,15 @@ async function executeTrade(sig) {
 
   if (!price) { console.log('  ⚠️  Could not get price — skipping'); return; }
   if (!info)  { console.log('  ⚠️  Unknown symbol — skipping'); return; }
+
+  // Reject a signal whose levels make no sense for the direction, so a bad
+  // parse or a typo in the channel cannot open a position with no exit.
+  const tpOk = sig.side === 'Buy' ? sig.takeProfit > price : sig.takeProfit < price;
+  const slOk = sig.side === 'Buy' ? sig.stopLoss  < price : sig.stopLoss  > price;
+  if (!(sig.takeProfit > 0) || !(sig.stopLoss > 0) || !tpOk || !slOk) {
+    console.log(`  ⚠️  Implausible levels for ${sig.side} at ${price} (TP ${sig.takeProfit}, SL ${sig.stopLoss}) — skipping`);
+    return;
+  }
 
   // One slot's worth of margin, levered up. Dividing by MAX_POSITIONS is what
   // lets all slots actually fit: margin used = notional / LEVERAGE, so sizing a
