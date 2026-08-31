@@ -20,3 +20,7 @@ node_modules/
 # Scratch
 *copy*
 live_trades.backup-*.json
+
+# Volume-mounted state
+*.corrupt-*
+*.tmp

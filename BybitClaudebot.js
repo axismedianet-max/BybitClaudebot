@@ -21,7 +21,11 @@ const HIGHER_LOWS_LOOKBACK  = 5;
 const MAX_HOLD_BARS         = 20;
 const POLL_INTERVAL_MS      = 60 * 1000;
 const RECV_WINDOW           = 5000;
-const STATE_FILE            = 'live_trades.json';
+// Container filesystems are wiped on redeploy, so trade history must live on a
+// mounted volume. STATE_DIR points at the mount in the cloud; locally it falls
+// back to the project folder.
+const STATE_DIR             = process.env.STATE_DIR || __dirname;
+const STATE_FILE            = require('path').join(STATE_DIR, 'live_trades.json');
 
 const API_KEY    = process.env.BYBIT_API_KEY;
 const API_SECRET = process.env.BYBIT_API_SECRET;
@@ -285,15 +289,22 @@ async function closePosition(symbol, qty) {
 // ─── State ────────────────────────────────────────────────────────────────────
 function loadState() {
   if (fs.existsSync(STATE_FILE)) {
-    try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch {}
+    try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (e) {
+      // A truncated write (killed mid-save) would otherwise silently reset the
+      // history to empty. Keep the damaged file so it can be recovered.
+      const salvage = STATE_FILE + '.corrupt-' + Date.now();
+      try { fs.renameSync(STATE_FILE, salvage); console.log(`  ⚠️  State unreadable (${e.message}) — moved to ${salvage}`); } catch {}
+    }
   }
   return { openTrades: [], closedTrades: [], signals: [] };
 }
 
 function saveState(state) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-  const js = `window.LIVE_DATA = ${JSON.stringify(state)};\nwindow.LIVE_DATA_TS = ${Date.now()};\n`;
-  fs.writeFileSync(require('path').join(__dirname, 'live_data.js'), js);
+  // Write to a temp file then rename. A crash partway through a direct write
+  // would leave truncated JSON and lose the trade history.
+  const tmp = STATE_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, STATE_FILE);
 }
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
