@@ -262,15 +262,27 @@ async function placeOrder(symbol, qty, takeProfit, stopLoss) {
 }
 
 // ─── Set leverage to 1x ───────────────────────────────────────────────────────
+// Returns true only if the symbol is definitely at LEVERAGE. Swallowing a
+// failure here silently placed orders at whatever leverage the symbol already
+// carried (20x, 25x), which moves liquidation inside the stop-loss and makes
+// the configured risk meaningless. The stop only protects at the leverage we
+// think we have, so a failure must block the trade.
 async function setLeverage(symbol) {
   try {
-    await apiPost('/v5/position/set-leverage', {
+    const r = await apiPost('/v5/position/set-leverage', {
       category:     'linear',
       symbol,
       buyLeverage:  String(LEVERAGE),
       sellLeverage: String(LEVERAGE),
     });
-  } catch {}
+    if (r.retCode === 0) return true;
+    if (r.retCode === 110043) return true;   // already at this leverage
+    console.log(`  \u26a0\ufe0f  Leverage ${LEVERAGE}x rejected for ${symbol}: ${r.retMsg}`);
+    return false;
+  } catch (e) {
+    console.log(`  \u26a0\ufe0f  Leverage call failed for ${symbol}: ${e.message}`);
+    return false;
+  }
 }
 
 // ─── Close a position at market ───────────────────────────────────────────────
@@ -505,8 +517,12 @@ async function scanSignals(state, balance) {
 
       if (qty < minQty || qty <= 0 || qty * entryPrice < 5) continue;
 
-      // Set 1x leverage before entry
-      await setLeverage(symbol);
+      // Refuse the trade if leverage could not be set: the stop-loss distance
+      // is only safe at the leverage we intend.
+      if (!(await setLeverage(symbol))) {
+        console.log(`  \u23ed\ufe0f  Skipping ${symbol} \u2014 could not confirm ${LEVERAGE}x leverage`);
+        continue;
+      }
 
       // Place the order
       let r;

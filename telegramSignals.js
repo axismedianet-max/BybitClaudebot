@@ -139,13 +139,23 @@ function roundQty(qty, step) {
   return parseFloat((Math.floor(qty / step) * step).toFixed(decimalsOf(step)));
 }
 
+// Returns true only if the symbol is definitely at LEVERAGE. A swallowed
+// failure placed orders at whatever leverage the symbol already carried, which
+// moves liquidation inside the stop-loss and makes the configured risk
+// meaningless — so a failure must block the trade.
 async function setLeverage(symbol) {
   try {
-    await apiPost('/v5/position/set-leverage', {
+    const r = await apiPost('/v5/position/set-leverage', {
       category: 'linear', symbol,
       buyLeverage: String(LEVERAGE), sellLeverage: String(LEVERAGE),
     });
-  } catch {}
+    if (r.retCode === 0 || r.retCode === 110043) return true;
+    console.log(`  \u26a0\ufe0f  Leverage ${LEVERAGE}x rejected for ${symbol}: ${r.retMsg}`);
+    return false;
+  } catch (e) {
+    console.log(`  \u26a0\ufe0f  Leverage call failed for ${symbol}: ${e.message}`);
+    return false;
+  }
 }
 
 // ─── Open positions currently held on Bybit ───────────────────────────────────
@@ -209,7 +219,10 @@ async function executeTrade(sig) {
     console.log(`  ⚠️  Qty ${qty} below minimum — skipping`); return;
   }
 
-  await setLeverage(sig.symbol);
+  if (!(await setLeverage(sig.symbol))) {
+    console.log(`  \u23ed\ufe0f  Skipping ${sig.symbol} \u2014 could not confirm ${LEVERAGE}x leverage`);
+    return;
+  }
 
   const r = await apiPost('/v5/order/create', {
     category:    'linear',
