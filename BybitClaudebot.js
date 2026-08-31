@@ -10,6 +10,7 @@ const STOP_LOSS_PCT         = 0.15;
 const TAKE_PROFIT_PCT       = 0.10;
 const MAX_POSITIONS         = 3;
 const LEVERAGE              = 20;
+const MAX_MARGIN_PER_TRADE  = 25;   // USD committed per position (not order value)
 const SIGNAL_CANDLES        = 50;
 const RSI_PERIOD            = 14;
 const BB_PERIOD             = 20;
@@ -473,11 +474,11 @@ async function scanSignals(state, balance) {
         continue;
       }
 
-      // One slot's worth of margin, levered up. Dividing by MAX_POSITIONS is what
-      // lets all slots actually fit: margin used = notional / LEVERAGE, so sizing a
-      // single trade at balance * LEVERAGE would consume the whole balance as margin
-      // and every later signal would fail on insufficient funds.
-      const positionUSDT = Math.max(45, (balance / MAX_POSITIONS) * LEVERAGE);
+      // Margin committed per position, capped, then levered up to get the order
+      // value. Dividing by MAX_POSITIONS is what lets all slots fit at once:
+      // margin used = notional / LEVERAGE.
+      const margin       = Math.min(balance / MAX_POSITIONS, MAX_MARGIN_PER_TRADE);
+      const positionUSDT = margin * LEVERAGE;
       if (positionUSDT < 5) continue; // Bybit minimum order value
       const rawQty  = positionUSDT / entryPrice;
       const qty     = roundQty(rawQty, symbol);

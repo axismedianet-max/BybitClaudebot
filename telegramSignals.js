@@ -12,6 +12,7 @@ const API_ID   = parseInt(process.env.TELEGRAM_API_ID || '0');
 const API_HASH = process.env.TELEGRAM_API_HASH || '';
 const LEVERAGE      = 20;
 const MAX_POSITIONS = 3;    // matches BybitClaudebot.js — counted live from Bybit
+const MAX_MARGIN_PER_TRADE = 25;   // USD committed per position (not order value)
 const RECV_WINDOW   = 5000;
 
 const API_KEY    = process.env.BYBIT_API_KEY;
@@ -179,11 +180,11 @@ async function executeTrade(sig) {
     return;
   }
 
-  // One slot's worth of margin, levered up. Dividing by MAX_POSITIONS is what
-  // lets all slots actually fit: margin used = notional / LEVERAGE, so sizing a
-  // single trade at balance * LEVERAGE would consume the whole balance as margin
-  // and every later signal would fail on insufficient funds.
-  const notional = Math.max(45, (balance / MAX_POSITIONS) * LEVERAGE);
+  // Margin committed per position, capped, then levered up to get the order
+  // value. Dividing by MAX_POSITIONS is what lets all slots fit at once:
+  // margin used = notional / LEVERAGE.
+  const margin   = Math.min(balance / MAX_POSITIONS, MAX_MARGIN_PER_TRADE);
+  const notional = margin * LEVERAGE;
   const qty      = roundQty(notional / price, info.qtyStep);
 
   if (qty < info.minOrderQty || qty <= 0) {
