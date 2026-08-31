@@ -566,6 +566,7 @@ async function tick() {
   state.unrealisedPnl  = balanceInfo.unrealisedPnl;
   state.maxPositions   = MAX_POSITIONS;   // published so the dashboard cannot drift
   state.leverage       = LEVERAGE;
+  state.stateFile      = STATE_FILE;      // so a misconfigured volume is visible
   saveState(state);
   await printSummary(state, balanceInfo.equity);
 }
