@@ -22,6 +22,17 @@ const RECV_WINDOW   = 5000;
 const ALLOWED = (process.env.TELEGRAM_ALLOWED_CHATS || '')
   .split(',').map(s => s.trim().replace(/^@/, '')).filter(Boolean);
 
+// Telegram reports a channel id two ways: the marked form -1001350671338 that
+// getDialogs returns, and the bare 1350671338 that getChat often gives inside an
+// event. Compare on the bare digits so either form in the allowlist matches, and
+// a configuration that looks right cannot silently ignore every signal.
+function bareId(v) { return String(v).replace(/^-?(100)?/, ''); }
+function idMatches(chatId, allowed) {
+  if (!chatId) return false;
+  const bare = bareId(chatId);
+  return allowed.some(a => /^-?\d+$/.test(a) && bareId(a) === bare);
+}
+
 const API_KEY    = process.env.BYBIT_API_KEY;
 const API_SECRET = process.env.BYBIT_API_SECRET;
 const SESSION_FILE = require('path').join(__dirname, 'telegram_session.txt');
@@ -297,7 +308,7 @@ async function executeTrade(sig) {
       return;
     }
 
-    const permitted = ALLOWED.includes(chatId) ||
+    const permitted = idMatches(chatId, ALLOWED) ||
                       ALLOWED.some(a => a.toLowerCase() === String(chatName).toLowerCase());
     if (!permitted) {
       console.log(`\n⛔ Ignored ${sig.symbol} ${sig.side} from "${chatName}" (id ${chatId}) — not an allowed chat`);
