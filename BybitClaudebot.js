@@ -48,7 +48,15 @@ function apiGet(path) {
     }, res => {
       let raw = '';
       res.on('data', d => raw += d);
-      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { reject(new Error('parse')); } });
+      res.on('end', () => {
+        try { return resolve(JSON.parse(raw)); } catch {}
+        // Bybit answers an unauthorised request with an empty body, so surface
+        // the status instead of a bare JSON parse failure.
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          return reject(new Error(`HTTP ${res.statusCode} — key rejected (check secret and IP whitelist)`));
+        }
+        reject(new Error(`HTTP ${res.statusCode} — unreadable response`));
+      });
     });
     req.on('error', reject);
     req.setTimeout(15000, () => { req.destroy(); reject(new Error('timeout')); });
@@ -483,9 +491,11 @@ async function tick() {
     balanceInfo = await getBalance();
   } catch (e) {
     console.log('  ⚠️  Balance fetch error:', e.message);
+    state.lastError = `Bybit auth failed: ${e.message}`;
     saveState(state);
     return;
   }
+  delete state.lastError;   // auth is working again
 
   await scanSignals(state, balanceInfo.equity);
   state.balance        = balanceInfo.equity;
@@ -512,14 +522,20 @@ async function tick() {
   PAIRS = await fetchAllPairs();
   console.log(` ${PAIRS.length} pairs found.\n`);
 
-  // Verify API works
+  // Verify API works. Deliberately non-fatal: exiting here would take the
+  // dashboard down with it and leave Railway crash-looping with no way to see
+  // why. Keep serving, surface the error, and let tick() retry — a bad key or a
+  // changed IP whitelist is recoverable without a redeploy.
   try {
     const bal = await getBalance();
     console.log(`💰 USDT Equity: $${bal.equity.toFixed(2)}  (Wallet: $${bal.walletBalance.toFixed(2)}  Unrealised: $${bal.unrealisedPnl.toFixed(2)})\n`);
   } catch (e) {
     console.error('❌ API auth failed:', e.message);
-    console.error('   Check API key permissions and IP whitelist.');
-    process.exit(1);
+    console.error('   Check the API key, secret, and IP whitelist.');
+    console.error('   Dashboard stays up; trading is paused until auth succeeds.\n');
+    const s = loadState();
+    s.lastError = `Bybit auth failed: ${e.message}`;
+    saveState(s);
   }
 
   await tick();

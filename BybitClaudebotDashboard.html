@@ -42,6 +42,8 @@ tr:hover td { background: #141414; }
 #status { font-size: 11px; color: #444; }
 #price-status { font-size: 11px; color: #333; }
 .empty { color: #333; padding: 16px 10px; font-style: italic; }
+.alert { background: #2a1414; border: 1px solid #5a2020; color: #e07a7a; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; display: none; }
+.alert.show { display: block; }
 .blink { animation: blink 0.3s ease; }
 @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
 </style>
@@ -55,6 +57,8 @@ tr:hover td { background: #141414; }
   <span id="price-status"></span>
 </div>
 <div class="subtitle">Positions auto-refresh every 30s · Live PnL every 10s</div>
+
+<div class="alert" id="alert"></div>
 
 <div class="cards" id="cards"></div>
 
@@ -184,6 +188,15 @@ async function tickPrices() {
 function render(data) {
   currentData = data;
   if (data.maxPositions) MAX_POS = data.maxPositions;
+
+  // A failing API key would otherwise look like an account worth $0
+  const alert = document.getElementById('alert');
+  if (data.lastError) {
+    alert.textContent = '⚠️  ' + data.lastError + ' — trading is paused. Check the API key, secret, and IP whitelist.';
+    alert.classList.add('show');
+  } else {
+    alert.classList.remove('show');
+  }
   const open   = data.openTrades   || [];
   const closed = data.closedTrades || [];
 
