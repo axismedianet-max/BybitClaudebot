@@ -15,6 +15,13 @@ const MAX_POSITIONS = 3;    // matches BybitClaudebot.js — counted live from B
 const MAX_MARGIN_PER_TRADE = 25;   // USD committed per position (not order value)
 const RECV_WINDOW   = 5000;
 
+// Chats permitted to trigger a trade, by id or @username. Empty means
+// observe-only: signals are logged with their chat id but nothing is placed.
+// Deliberately fail-closed — a message in the signal format can arrive from any
+// chat, so an unfiltered listener would let a stranger's DM open a position.
+const ALLOWED = (process.env.TELEGRAM_ALLOWED_CHATS || '')
+  .split(',').map(s => s.trim().replace(/^@/, '')).filter(Boolean);
+
 const API_KEY    = process.env.BYBIT_API_KEY;
 const API_SECRET = process.env.BYBIT_API_SECRET;
 const SESSION_FILE = require('path').join(__dirname, 'telegram_session.txt');
@@ -228,11 +235,23 @@ async function executeTrade(sig) {
   const session = new StringSession(loadSession());
   const client  = new TelegramClient(session, API_ID, API_HASH, { connectionRetries: 5 });
 
+  // Interactive login needs a phone code typed at a prompt. In the cloud there
+  // is no stdin, so a rejected session would block forever on a question nobody
+  // can answer — the service would look healthy while doing nothing. Fail loudly
+  // instead.
+  const interactive = process.stdin.isTTY;
+  const noPrompt = (what) => async () => {
+    console.error(`\n❌ Telegram wants ${what}, but there is no terminal to ask.`);
+    console.error('   TELEGRAM_SESSION is missing or no longer valid.');
+    console.error('   Run this locally to mint a fresh session, then set it here.\n');
+    process.exit(1);
+  };
+
   await client.start({
-    phoneNumber:  async () => await input.text('📱 Your phone number (with country code, e.g. +1234567890): '),
-    password:     async () => await input.text('🔐 2FA password (leave blank if none): '),
-    phoneCode:    async () => await input.text('📩 Telegram code sent to your phone: '),
-    onError:      (err) => console.error('Auth error:', err),
+    phoneNumber: interactive ? async () => await input.text('📱 Phone number (with country code): ') : noPrompt('a phone number'),
+    password:    interactive ? async () => await input.text('🔐 2FA password (blank if none): ')     : noPrompt('a 2FA password'),
+    phoneCode:   interactive ? async () => await input.text('📩 Code sent to your phone: ')          : noPrompt('a login code'),
+    onError:     (err) => console.error('Auth error:', err),
   });
 
   const sessionString = client.session.save();
@@ -246,7 +265,13 @@ async function executeTrade(sig) {
     console.log(sessionString);
     console.log('━'.repeat(70) + '\n');
   }
-  console.log('👂 Listening for signals in all channels...\n');
+  if (ALLOWED.length) {
+    console.log(`👂 Listening. Trading only signals from: ${ALLOWED.join(', ')}\n`);
+  } else {
+    console.log('👂 Listening in OBSERVE-ONLY mode — no orders will be placed.');
+    console.log('   Signals will be logged with their chat id. Put the id of your');
+    console.log('   signal channel in TELEGRAM_ALLOWED_CHATS to enable trading.\n');
+  }
 
   client.addEventHandler(async (event) => {
     const msg  = event.message;
@@ -256,6 +281,30 @@ async function executeTrade(sig) {
     const sig = parseSignal(text);
     if (!sig) return;
 
+    // Identify the source. A message matching the signal format can arrive from
+    // any chat — including a private message from a stranger — so the sender is
+    // untrusted input and must be checked before it can move money.
+    let chatId = '', chatName = '';
+    try {
+      const chat = await event.getChat();
+      chatId   = String(chat?.id ?? '');
+      chatName = chat?.username || chat?.title || '(unnamed)';
+    } catch { chatName = '(unknown)'; }
+
+    if (!ALLOWED.length) {
+      console.log(`\n👁  Observed ${sig.symbol} ${sig.side} from "${chatName}" (id ${chatId})`);
+      console.log('   Not trading — TELEGRAM_ALLOWED_CHATS is unset.');
+      return;
+    }
+
+    const permitted = ALLOWED.includes(chatId) ||
+                      ALLOWED.some(a => a.toLowerCase() === String(chatName).toLowerCase());
+    if (!permitted) {
+      console.log(`\n⛔ Ignored ${sig.symbol} ${sig.side} from "${chatName}" (id ${chatId}) — not an allowed chat`);
+      return;
+    }
+
+    console.log(`\n📨 Signal from "${chatName}"`);
     try {
       await executeTrade(sig);
     } catch (e) {
