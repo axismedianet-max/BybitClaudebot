@@ -19,3 +19,4 @@ node_modules/
 
 # Scratch
 *copy*
+live_trades.backup-*.json
