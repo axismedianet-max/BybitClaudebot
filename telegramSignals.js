@@ -323,6 +323,22 @@ async function executeTrade(sig) {
     }
   }, new NewMessage({}));
 
-  // Keep alive
-  await client.run();
+  // gramJS has no run(), and its `disconnected` member is a boolean rather than
+  // a promise, so there is nothing to await — awaiting it exits immediately.
+  // Hold the process open explicitly, and watch the connection: a listener that
+  // is running but disconnected would silently miss every signal, which looks
+  // identical to a quiet channel.
+  setInterval(async () => {
+    if (client.connected) return;
+    console.error('⚠️  Telegram disconnected — reconnecting...');
+    try {
+      await client.connect();
+      console.log('✓ Reconnected');
+    } catch (e) {
+      console.error(`❌ Reconnect failed: ${e.message} — exiting so the platform restarts.`);
+      process.exit(1);
+    }
+  }, 60000);
+
+  await new Promise(() => {});   // keep alive; the event handler does the work
 })();
