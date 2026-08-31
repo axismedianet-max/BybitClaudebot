@@ -54,23 +54,52 @@ function saveSession(str) {
 }
 
 // ─── Parse signal ─────────────────────────────────────────────────────────────
+// The channel posts in two layouts and switched between them mid-August, so
+// both must parse. Old:  "Trading Pair : FIL / Position : LONG / TP : 0.863"
+// New:  "Trading Pair: #AXLUSDT / LONG Setup / TP1: $0.0475 / SL: $0.0415",
+// with $ signs, thousands commas, en-dash entry ranges and numbered targets.
 function parseSignal(text) {
   if (!text) return null;
-  const pair     = text.match(/Trading Pair\s*:\s*(\w+)/i);
-  const position = text.match(/Position\s*:\s*(LONG|SHORT)/i);
-  const entry    = text.match(/Area Entry\s*:\s*([\d.]+)/i);
-  const sl       = text.match(/SL\s*:\s*([\d.]+)/i);
-  const tp       = text.match(/TP\s*:\s*([\d.]+)/i);
-  if (!pair || !position || !sl || !tp) return null;
-  const symbol = pair[1].toUpperCase().replace(/USDT$/, '') + 'USDT';
+
+  // "$76,877" and "0.0443" both have to survive
+  const num = v => parseFloat(String(v).replace(/[$,\s]/g, ''));
+
+  // "Trading Pair : FIL" | "Trading Pair: #AXLUSDT"
+  const pair = text.match(/Trading\s*Pair\s*:?\s*#?([A-Za-z0-9]+)/i);
+  if (!pair) return null;
+
+  // "Position : LONG" (old) | "LONG Setup" (new)
+  const dir = text.match(/Position\s*:\s*(LONG|SHORT)/i)
+           || text.match(/\b(LONG|SHORT)\s+Setup/i);
+  if (!dir) return null;
+
+  // "SL : 0.6" | "SL: $0.0415" | "Stop Loss: $75,466"
+  const slM = text.match(/(?:\bSL\b|Stop\s*Loss)\s*:?\s*\$?\s*([\d,]+\.?\d*)/i);
+  if (!slM) return null;
+
+  // Prefer TP1 — the nearest target, and the one most likely to be reached.
+  // Falls back to the old format's single "TP".
+  const tpM = text.match(/\bTP\s*1\s*:?\s*\$?\s*([\d,]+\.?\d*)/i)
+           || text.match(/\bTP\s*:?\s*\$?\s*([\d,]+\.?\d*)/i);
+  if (!tpM) return null;
+
+  // Entry may be absent, a single value, or a range — the first number is enough,
+  // and only used for sanity checks since entries are market orders.
+  const enM = text.match(/(?:Area\s+)?\bEntry\b\s*:?\s*\$?\s*([\d,]+\.?\d*)/i);
+
+  const stopLoss   = num(slM[1]);
+  const takeProfit = num(tpM[1]);
+  if (!(stopLoss > 0) || !(takeProfit > 0)) return null;
+
   return {
-    symbol,
-    side:       position[1].toUpperCase() === 'LONG' ? 'Buy' : 'Sell',
-    entryPrice: entry ? parseFloat(entry[1]) : null,
-    stopLoss:   parseFloat(sl[1]),
-    takeProfit: parseFloat(tp[1]),
+    symbol:     pair[1].toUpperCase().replace(/USDT$/, '') + 'USDT',
+    side:       dir[1].toUpperCase() === 'LONG' ? 'Buy' : 'Sell',
+    entryPrice: enM ? num(enM[1]) : null,
+    stopLoss,
+    takeProfit,
   };
 }
+
 
 // ─── Bybit API ────────────────────────────────────────────────────────────────
 function apiPost(path, body) {
