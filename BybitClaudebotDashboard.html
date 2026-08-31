@@ -224,12 +224,18 @@ function render(data) {
   }
 
   // ── Open orders ───────────────────────────────────────────────────────────
-  document.getElementById('ord-count').textContent = orders.length ? `(${orders.length})` : '';
+  // Bybit splits these into "Limit & Market Orders" and "TP/SL". Reduce-only
+  // triggers are already shown per-position in the TP/SL column, and listing
+  // them here buries the actual entry orders among duplicates.
+  const entryOrders = orders.filter(o => !o.reduceOnly);
+  const triggers    = orders.length - entryOrders.length;
+  document.getElementById('ord-count').textContent =
+    `(${entryOrders.length})` + (triggers ? ` · ${triggers} TP/SL triggers hidden` : '');
   const ob = document.getElementById('ord-body');
-  if (!orders.length) {
-    ob.innerHTML = '<tr><td colspan="9" class="empty">No open orders</td></tr>';
+  if (!entryOrders.length) {
+    ob.innerHTML = '<tr><td colspan="9" class="empty">No open entry orders</td></tr>';
   } else {
-    ob.innerHTML = orders.map(o => `
+    ob.innerHTML = entryOrders.map(o => `
       <tr>
         <td>${o.symbol}</td>
         <td>${o.orderType}</td>

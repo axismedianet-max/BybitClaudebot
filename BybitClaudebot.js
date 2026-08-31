@@ -7,7 +7,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const TIMEFRAMES            = ['15', '60'];
 const RISK_PCT              = 0.05;   // 5% of balance per trade
 const TAKE_PROFIT_PCT       = 0.10;
-const MAX_POSITIONS         = 3;
+const MAX_POSITIONS         = 6;
 const LEVERAGE              = 20;
 // Stop when this fraction of the position's margin is gone. Expressed against
 // margin rather than price so it scales with leverage: a fixed price stop that

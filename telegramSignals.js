@@ -11,7 +11,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const API_ID   = parseInt(process.env.TELEGRAM_API_ID || '0');
 const API_HASH = process.env.TELEGRAM_API_HASH || '';
 const LEVERAGE      = 20;
-const MAX_POSITIONS = 3;    // matches BybitClaudebot.js — counted live from Bybit
+const MAX_POSITIONS = 6;    // matches BybitClaudebot.js — counted live from Bybit
 const MAX_MARGIN_PER_TRADE = 25;   // USD committed per position (not order value)
 // Cap on how much of a position's margin a stop may risk. Signal channels quote
 // stops for unleveraged sizing — the FIL signal's stop sat ~9.8% from entry,
