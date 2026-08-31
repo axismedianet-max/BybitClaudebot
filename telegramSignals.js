@@ -10,9 +10,14 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 // ─── Config ───────────────────────────────────────────────────────────────────
 const API_ID   = parseInt(process.env.TELEGRAM_API_ID || '0');
 const API_HASH = process.env.TELEGRAM_API_HASH || '';
-const LEVERAGE      = 5;
+const LEVERAGE      = 20;
 const MAX_POSITIONS = 3;    // matches BybitClaudebot.js — counted live from Bybit
 const MAX_MARGIN_PER_TRADE = 25;   // USD committed per position (not order value)
+// Cap on how much of a position's margin a stop may risk. Signal channels quote
+// stops for unleveraged sizing — the FIL signal's stop sat ~9.8% from entry,
+// which at 20x is past the liquidation point and would never have fired. The
+// tighter of (channel stop, this cap) is used so a stop always exists.
+const SL_MARGIN_PCT = 0.75;
 const RECV_WINDOW   = 5000;
 
 // Chats permitted to trigger a trade, by id or @username. Empty means
