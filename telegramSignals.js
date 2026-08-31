@@ -208,6 +208,18 @@ async function executeTrade(sig) {
     return;
   }
 
+  // Pull the stop inside the liquidation point if the channel's is too wide.
+  // Signal channels quote stops for unleveraged sizing: the FIL signal's stop
+  // sat ~9.8% from entry, which at 20x is past liquidation and would never fire.
+  const maxDist = price * (SL_MARGIN_PCT / LEVERAGE);
+  const channelDist = Math.abs(price - sig.stopLoss);
+  if (channelDist > maxDist) {
+    const capped = sig.side === 'Buy' ? price - maxDist : price + maxDist;
+    console.log(`  \u2702\ufe0f  Channel stop ${sig.stopLoss} is ${(channelDist / price * 100).toFixed(1)}% away \u2014 past liquidation at ${LEVERAGE}x.`);
+    console.log(`     Tightening to ${+capped.toFixed(8)} (${SL_MARGIN_PCT * 100}% of margin).`);
+    sig.stopLoss = +capped.toFixed(8);
+  }
+
   // Margin committed per position, capped, then levered up to get the order
   // value. Dividing by MAX_POSITIONS is what lets all slots fit at once:
   // margin used = notional / LEVERAGE.

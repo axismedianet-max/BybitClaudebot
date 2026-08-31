@@ -6,10 +6,14 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 // ─── Config ───────────────────────────────────────────────────────────────────
 const TIMEFRAMES            = ['15', '60'];
 const RISK_PCT              = 0.05;   // 5% of balance per trade
-const STOP_LOSS_PCT         = 0.15;
 const TAKE_PROFIT_PCT       = 0.10;
 const MAX_POSITIONS         = 3;
-const LEVERAGE              = 5;
+const LEVERAGE              = 20;
+// Stop when this fraction of the position's margin is gone. Expressed against
+// margin rather than price so it scales with leverage: a fixed price stop that
+// is safe at 5x sits beyond the liquidation point at 20x and never fires.
+const SL_MARGIN_PCT         = 0.75;
+const STOP_LOSS_PCT         = SL_MARGIN_PCT / LEVERAGE;   // price distance
 const MAX_MARGIN_PER_TRADE  = 25;   // USD committed per position (not order value)
 const SIGNAL_CANDLES        = 50;
 const RSI_PERIOD            = 14;
