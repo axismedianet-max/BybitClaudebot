@@ -20,10 +20,23 @@ function authorised(req) {
 
 function start(getState) {
   const port = parseInt(process.env.PORT || '8080');
-  const host = TOKEN ? '0.0.0.0' : '127.0.0.1';
 
+  // Always bind 0.0.0.0. Binding loopback when no token was set made a
+  // misconfigured deploy indistinguishable from a crashed one — the platform
+  // could not reach it and returned an opaque 502. Withholding the data
+  // without a token is the security boundary; refusing the connection is not.
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
+
+    if (!TOKEN) {
+      res.writeHead(503, { 'Content-Type': 'text/plain' });
+      return res.end(
+        'Dashboard is running but DASHBOARD_TOKEN is not set.\n\n' +
+        'This endpoint exposes balance, positions and PnL, so it will not serve\n' +
+        'data without one. Set DASHBOARD_TOKEN in the environment, redeploy,\n' +
+        'then open this page as  ?token=YOUR_TOKEN\n'
+      );
+    }
 
     if (!authorised(req)) {
       res.writeHead(401, { 'Content-Type': 'text/plain' });
@@ -69,11 +82,10 @@ function start(getState) {
     res.end('Not found');
   });
 
-  server.listen(port, host, () => {
-    console.log(`📊 Dashboard on http://${host}:${port}`);
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`📊 Dashboard listening on 0.0.0.0:${port}`);
     if (!TOKEN) {
-      console.log('   ⚠️  DASHBOARD_TOKEN not set — bound to loopback only.');
-      console.log('      Set it in Railway to reach the dashboard from a browser.');
+      console.log('   ⚠️  DASHBOARD_TOKEN not set — serving a 503 notice, no data.');
     }
   });
 
