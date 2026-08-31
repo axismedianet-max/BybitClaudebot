@@ -364,6 +364,60 @@ async function fetchBybitPositions() {
   } catch { return null; }
 }
 
+// ─── Full account snapshot for the dashboard ──────────────────────────────────
+// Everything open on the account, not just what this bot placed: the user also
+// trades by hand, and a dashboard that hides those positions misrepresents the
+// account's real exposure.
+async function fetchAccountSnapshot() {
+  const out = { positions: [], orders: [], fetchedAt: Date.now() };
+  try {
+    const r = await apiGet('/v5/position/list?category=linear&settleCoin=USDT&limit=200');
+    if (r.retCode === 0) {
+      out.positions = (r.result?.list || [])
+        .filter(p => parseFloat(p.size) > 0)
+        .map(p => ({
+          symbol:        p.symbol,
+          side:          p.side,
+          leverage:      p.leverage,
+          tradeMode:     p.tradeMode === 0 ? 'Cross' : 'Isolated',
+          qty:           p.size,
+          value:         p.positionValue,
+          entryPrice:    p.avgPrice,
+          markPrice:     p.markPrice,
+          liqPrice:      p.liqPrice,
+          breakEven:     p.breakEvenPrice || p.avgPrice,
+          im:            p.positionIM,
+          mm:            p.positionMM,
+          unrealisedPnl: p.unrealisedPnl,
+          realisedPnl:   p.curRealisedPnl,
+          takeProfit:    p.takeProfit,
+          stopLoss:      p.stopLoss,
+          createdTime:   p.createdTime,
+        }));
+    }
+  } catch {}
+  try {
+    const r = await apiGet('/v5/order/realtime?category=linear&settleCoin=USDT&limit=50');
+    if (r.retCode === 0) {
+      out.orders = (r.result?.list || []).map(o => ({
+        symbol:      o.symbol,
+        orderType:   o.orderType,
+        side:        o.side,
+        price:       o.price,
+        qty:         o.qty,
+        filled:      o.cumExecQty,
+        orderValue:  (parseFloat(o.price || 0) * parseFloat(o.qty || 0)).toFixed(2),
+        takeProfit:  o.takeProfit,
+        stopLoss:    o.stopLoss,
+        reduceOnly:  o.reduceOnly,
+        createdTime: o.createdTime,
+        orderId:     o.orderId,
+      }));
+    }
+  } catch {}
+  return out;
+}
+
 // ─── Bybit's own record of what a closed position actually made ───────────────
 async function fetchClosedPnl(symbol, sinceMs) {
   try {
@@ -614,7 +668,7 @@ async function tick() {
   console.log('   Press Ctrl+C to stop.\n');
 
   // Serve the dashboard so it works from a browser when running in the cloud
-  require('./dashboardServer').start(loadState);
+  require('./dashboardServer').start(loadState, fetchAccountSnapshot);
 
   process.stdout.write('🔍 Fetching all Bybit USDT perpetuals...');
   PAIRS = await fetchAllPairs();

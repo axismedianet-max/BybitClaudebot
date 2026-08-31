@@ -42,6 +42,16 @@ tr:hover td { background: #141414; }
 #status { font-size: 11px; color: #444; }
 #price-status { font-size: 11px; color: #333; }
 .empty { color: #333; padding: 16px 10px; font-style: italic; }
+.r { text-align: right; }
+td.r { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+.muted { color: #555; font-weight: normal; font-size: 11px; letter-spacing: 0; }
+.lev { color: #d4a04a; font-size: 11px; }
+.long { color: #4caf8a; }
+.short { color: #e05a5a; }
+.liq { color: #d48a4a; }
+.tag { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: #1e2a3a; color: #6a9ad4; }
+.tag.manual { background: #2a2a1e; color: #b0a060; }
 .alert { background: #2a1414; border: 1px solid #5a2020; color: #e07a7a; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; display: none; }
 .alert.show { display: block; }
 .blink { animation: blink 0.3s ease; }
@@ -56,137 +66,98 @@ tr:hover td { background: #141414; }
   <span id="status">loading...</span>
   <span id="price-status"></span>
 </div>
-<div class="subtitle">Positions auto-refresh every 30s · Live PnL every 10s</div>
+<div class="subtitle">All account positions and orders, live from Bybit · refreshes every 10s</div>
 
 <div class="alert" id="alert"></div>
 
 <div class="cards" id="cards"></div>
 
 <section>
-  <h2>Open Positions</h2>
-  <table id="open-table">
+  <h2>Positions <span id="pos-count" class="muted"></span></h2>
+  <div class="scroll">
+  <table>
     <thead><tr>
-      <th>Symbol</th><th>TF</th><th>Entry</th><th>Now</th><th>TP</th><th>SL</th><th>Unreal. PnL</th><th>Size</th><th>Bars</th><th>Signals</th><th>Opened</th>
+      <th>Contracts</th><th class="r">Qty</th><th class="r">Value</th><th class="r">Entry</th>
+      <th class="r">Mark</th><th class="r">Liq. Price</th><th class="r">Breakeven</th>
+      <th class="r">IM</th><th class="r">MM</th><th class="r">Unrealized P&amp;L (ROI)</th>
+      <th class="r">Realized P&amp;L</th><th class="r">TP/SL</th><th>Source</th>
     </tr></thead>
-    <tbody id="open-body"></tbody>
+    <tbody id="pos-body"></tbody>
   </table>
+  </div>
 </section>
 
 <section>
-  <h2>Closed Trades</h2>
-  <table id="closed-table">
+  <h2>Open Orders <span id="ord-count" class="muted"></span></h2>
+  <div class="scroll">
+  <table>
     <thead><tr>
-      <th>Symbol</th><th>TF</th><th>Result</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Signals</th><th>Opened</th><th>Closed</th>
+      <th>Market</th><th>Type</th><th>Direction</th><th class="r">Order Price</th>
+      <th class="r">Filled/Qty</th><th class="r">Order Value</th><th class="r">TP/SL</th>
+      <th>Order Time</th><th>Reduce-Only</th>
+    </tr></thead>
+    <tbody id="ord-body"></tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>Bot Trade History</h2>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>Symbol</th><th>TF</th><th>Result</th><th class="r">Entry</th><th class="r">Exit</th>
+      <th class="r">PnL</th><th>Signals</th><th>Opened</th><th>Closed</th>
     </tr></thead>
     <tbody id="closed-body"></tbody>
   </table>
+  </div>
 </section>
 
 <script>
-let MAX_POS = 3;   // overridden by whatever the bot reports
+let MAX_POS = 3;              // overridden by whatever the bot reports
+const REFRESH_MS = 10000;     // live account data straight from Bybit
 
-let currentData = null;
-let livePrices = {};
-
-function fmt(n, dec) {
-  if (n === undefined || n === null) return '—';
+// Price formatting has to cope with both BTC (~77000) and sub-penny alts,
+// so decimals scale with magnitude rather than being fixed.
+function px(n) {
+  if (n === undefined || n === null || n === '' ) return '—';
   const v = Number(n);
-  if (dec !== undefined) return v.toFixed(dec);
-  // auto decimals based on magnitude
-  if (v >= 100)  return v.toFixed(2);
+  if (!isFinite(v) || v === 0) return '—';
+  if (v >= 1000) return v.toFixed(2);
   if (v >= 1)    return v.toFixed(4);
   if (v >= 0.01) return v.toFixed(5);
-  return v.toFixed(6);
+  return v.toPrecision(4);
 }
-
-function fmtTime(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
+function usd(n, dec = 2) {
+  if (n === undefined || n === null || n === '') return '—';
+  const v = Number(n);
+  return isFinite(v) ? v.toFixed(dec) : '—';
+}
+function signed(n) {
+  const v = Number(n) || 0;
+  const cls = v >= 0 ? 'pnl-pos' : 'pnl-neg';
+  return `<span class="${cls}">${v >= 0 ? '+' : ''}${v.toFixed(4)}</span>`;
+}
+function fmtTime(t) {
+  if (!t) return '—';
+  const d = new Date(isNaN(t) ? t : Number(t));
+  if (isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-GB', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false });
 }
-
 function signalDots(s) {
   if (!s) return '—';
-  let d = '';
-  d += s.rsiOversold ? '🟢' : '⚪';
-  d += s.bbSqueeze   ? '🟡' : '⚪';
-  d += s.higherLows  ? '🔵' : '⚪';
-  return `<span class="dots" title="RSI oversold · BB squeeze · Higher lows">${d}</span>`;
+  return `<span class="dots" title="RSI oversold · BB squeeze · Higher lows">${
+    (s.rsiOversold ? '🟢' : '⚪') + (s.bbSqueeze ? '🟡' : '⚪') + (s.higherLows ? '🔵' : '⚪')}</span>`;
 }
 
-// ── Fetch live prices from Bybit public API ──────────────────────────────────
-async function fetchLivePrices(symbols) {
-  if (!symbols.length) return;
-  // Batch: fetch all tickers for linear category, then filter
-  try {
-    const url = 'https://api.bybit.com/v5/market/tickers?category=linear';
-    const res = await fetch(url);
-    const json = await res.json();
-    if (json.retCode !== 0 || !json.result?.list) return;
-    for (const t of json.result.list) {
-      if (symbols.includes(t.symbol)) {
-        livePrices[t.symbol] = parseFloat(t.lastPrice);
-      }
-    }
-  } catch (e) {
-    // silently ignore — stale prices stay
-  }
-}
-
-// ── Update just the price/PnL cells without re-rendering everything ──────────
-function updatePriceCells() {
-  if (!currentData) return;
-  const open = currentData.openTrades || [];
-  let totalUnreal = 0;
-
-  for (const trade of open) {
-    const price = livePrices[trade.symbol];
-    const row = document.getElementById('row-' + trade.id);
-    if (!row) continue;
-
-    const priceCell = row.querySelector('.cell-price');
-    const pnlCell   = row.querySelector('.cell-upnl');
-
-    if (price) {
-      const pct = ((price - trade.entryPrice) / trade.entryPrice * 100);
-      const upnl = (price - trade.entryPrice) * trade.qty;
-      totalUnreal += upnl;
-
-      if (priceCell) {
-        priceCell.textContent = fmt(price);
-        priceCell.className = 'cell-price price-live ' + (price >= trade.entryPrice ? 'pnl-pos' : 'pnl-neg');
-      }
-      if (pnlCell) {
-        const sign = upnl >= 0 ? '+' : '';
-        pnlCell.innerHTML = `<span class="${upnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${sign}$${upnl.toFixed(2)}</span> <span class="ts">(${sign}${pct.toFixed(1)}%)</span>`;
-        pnlCell.classList.add('blink');
-        setTimeout(() => pnlCell.classList.remove('blink'), 300);
-      }
-    }
-  }
-
-  // Update unrealised PnL card
-  const card = document.getElementById('upnl-card');
-  if (card) {
-    const cls = totalUnreal >= 0 ? 'green' : 'red';
-    const sign = totalUnreal >= 0 ? '+' : '';
-    card.innerHTML = `<div class="label">Unrealised PnL</div><div class="value ${cls}">${sign}$${totalUnreal.toFixed(2)}</div>`;
-  }
-
-  const now = new Date().toLocaleTimeString();
-  document.getElementById('price-status').textContent = '· prices ' + now;
-}
-
-async function tickPrices() {
-  if (!currentData) return;
-  const symbols = [...new Set((currentData.openTrades || []).map(t => t.symbol))];
-  await fetchLivePrices(symbols);
-  updatePriceCells();
-}
-
-// ── Full render from data ────────────────────────────────────────────────────
 function render(data) {
-  currentData = data;
+  const live      = data.live || {};
+  const positions = live.positions || [];
+  const orders    = live.orders    || [];
+  const closed    = data.closedTrades || [];
+  const botSymbols = new Set((data.openTrades || []).map(t => t.symbol));
+
   if (data.maxPositions) MAX_POS = data.maxPositions;
 
   // A failing API key would otherwise look like an account worth $0
@@ -197,128 +168,118 @@ function render(data) {
   } else {
     alert.classList.remove('show');
   }
-  const open   = data.openTrades   || [];
-  const closed = data.closedTrades || [];
 
-  const totalPnl    = closed.reduce((s, t) => s + (t.pnl || 0), 0);
-  const decided     = closed.filter(t => t.outcome !== 'timeout');
-  const wins        = decided.filter(t => t.outcome === 'win');
-  const winRate     = decided.length ? (wins.length / decided.length * 100).toFixed(0) : '—';
-  const equity      = data.balance || 0;
-  const unrealised  = data.unrealisedPnl || 0;
-  const pnlClass    = totalPnl >= 0 ? 'green' : 'red';
-  const upnlClass   = unrealised >= 0 ? 'green' : 'red';
-  const upnlSign    = unrealised >= 0 ? '+' : '';
+  // ── Cards ─────────────────────────────────────────────────────────────────
+  const realised   = closed.reduce((s, t) => s + (t.pnl || 0), 0);
+  const decided    = closed.filter(t => t.outcome === 'win' || t.outcome === 'loss');
+  const wins       = decided.filter(t => t.outcome === 'win');
+  const winRate    = decided.length ? (wins.length / decided.length * 100) : null;
+  const unrealised = positions.reduce((s, p) => s + (Number(p.unrealisedPnl) || 0), 0);
+  const equity     = Number(data.balance) || 0;
+  const botOpen    = (data.openTrades || []).length;
 
   document.getElementById('cards').innerHTML = `
-    <div class="card">
-      <div class="label">Equity</div>
-      <div class="value">$${equity.toFixed(2)}</div>
-    </div>
-    <div class="card">
-      <div class="label">Realised PnL</div>
-      <div class="value ${pnlClass}">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</div>
-    </div>
-    <div class="card" id="upnl-card">
-      <div class="label">Unrealised PnL</div>
-      <div class="value ${upnlClass}">${upnlSign}$${unrealised.toFixed(2)}</div>
-    </div>
-    <div class="card">
-      <div class="label">Win Rate</div>
-      <div class="value ${decided.length ? (winRate >= 50 ? 'green' : 'red') : ''}">${winRate}${decided.length ? '%' : ''}</div>
-    </div>
-    <div class="card">
-      <div class="label">Positions</div>
-      <div class="value">${open.length} / ${MAX_POS}</div>
-      <div class="pos-bar"><div class="pos-bar-fill" style="width:${(open.length/MAX_POS*100).toFixed(0)}%"></div></div>
-    </div>
-    <div class="card">
-      <div class="label">Total Trades</div>
-      <div class="value yellow">${closed.length}</div>
-    </div>
+    <div class="card"><div class="label">Equity</div><div class="value">$${usd(equity)}</div></div>
+    <div class="card"><div class="label">Unrealised PnL</div>
+      <div class="value ${unrealised >= 0 ? 'green' : 'red'}">${unrealised >= 0 ? '+' : ''}$${usd(unrealised)}</div></div>
+    <div class="card"><div class="label">Bot Realised</div>
+      <div class="value ${realised >= 0 ? 'green' : 'red'}">${realised >= 0 ? '+' : ''}$${usd(realised)}</div></div>
+    <div class="card"><div class="label">Bot Win Rate</div>
+      <div class="value ${winRate === null ? '' : (winRate >= 27.3 ? 'green' : 'red')}">${winRate === null ? '—' : winRate.toFixed(0) + '%'}</div>
+      <div class="label" style="margin:6px 0 0">break-even 27%</div></div>
+    <div class="card"><div class="label">Bot Positions</div>
+      <div class="value">${botOpen} / ${MAX_POS}</div>
+      <div class="pos-bar"><div class="pos-bar-fill" style="width:${(botOpen / MAX_POS * 100).toFixed(0)}%"></div></div></div>
+    <div class="card"><div class="label">Bot Trades</div><div class="value yellow">${closed.length}</div></div>
   `;
 
-  // Open trades
-  const ob = document.getElementById('open-body');
-  if (open.length === 0) {
-    ob.innerHTML = '<tr><td colspan="11" class="empty">No open positions</td></tr>';
+  // ── Positions (everything on the account, not just the bot's) ─────────────
+  document.getElementById('pos-count').textContent = positions.length ? `(${positions.length})` : '';
+  const pb = document.getElementById('pos-body');
+  if (!positions.length) {
+    pb.innerHTML = '<tr><td colspan="13" class="empty">No open positions</td></tr>';
   } else {
-    ob.innerHTML = open.map(t => `
-      <tr id="row-${t.id}">
-        <td>${t.symbol}</td>
-        <td>${t.timeframe}</td>
-        <td>${fmt(t.entryPrice)}</td>
-        <td class="cell-price price-live">…</td>
-        <td style="color:#4caf8a">${fmt(t.takeProfit)}</td>
-        <td style="color:#e05a5a">${fmt(t.stopLoss)}</td>
-        <td class="cell-upnl"><span class="ts">…</span></td>
-        <td>$${fmt(t.positionUSDT, 2)}</td>
-        <td>${t.barsHeld}</td>
-        <td>${signalDots(t.signals)}</td>
-        <td class="ts">${fmtTime(t.entryTime)}</td>
-      </tr>
-    `).join('');
-  }
-
-  // Closed trades (newest first)
-  const cb = document.getElementById('closed-body');
-  const sortedClosed = [...closed].reverse();
-  if (sortedClosed.length === 0) {
-    cb.innerHTML = '<tr><td colspan="9" class="empty">No closed trades yet</td></tr>';
-  } else {
-    cb.innerHTML = sortedClosed.map(t => {
-      const pnl = t.pnl || 0;
-      const pnlStr = pnl !== 0
-        ? `<span class="${pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`
-        : '<span class="ts">—</span>';
+    pb.innerHTML = positions.map(p => {
+      const upnl = Number(p.unrealisedPnl) || 0;
+      const im   = Number(p.im) || 0;
+      const roi  = im ? (upnl / im * 100) : null;       // ROI is against margin, as Bybit shows it
+      const isBot = botSymbols.has(p.symbol);
       return `
         <tr>
-          <td>${t.symbol}</td>
-          <td>${t.timeframe}</td>
-          <td><span class="badge ${t.outcome}">${t.outcome}</span></td>
-          <td>${fmt(t.entryPrice)}</td>
-          <td>${t.exitPrice ? fmt(t.exitPrice) : '—'}</td>
-          <td>${pnlStr}</td>
-          <td>${signalDots(t.signals)}</td>
-          <td class="ts">${fmtTime(t.entryTime)}</td>
-          <td class="ts">${fmtTime(t.exitTime)}</td>
-        </tr>
-      `;
+          <td>${p.symbol}<br><span class="lev">${p.tradeMode} ${Number(p.leverage).toFixed(2)}x</span></td>
+          <td class="r ${p.side === 'Buy' ? 'long' : 'short'}">${p.qty}</td>
+          <td class="r">${usd(p.value)}</td>
+          <td class="r">${px(p.entryPrice)}</td>
+          <td class="r">${px(p.markPrice)}</td>
+          <td class="r liq">${px(p.liqPrice)}</td>
+          <td class="r">${px(p.breakEven)}</td>
+          <td class="r">${usd(p.im, 4)}</td>
+          <td class="r">${usd(p.mm, 4)}</td>
+          <td class="r">${signed(upnl)}${roi === null ? '' : ` <span class="ts">(${roi >= 0 ? '+' : ''}${roi.toFixed(2)}%)</span>`}</td>
+          <td class="r">${signed(p.realisedPnl)}</td>
+          <td class="r"><span class="pnl-pos">${px(p.takeProfit)}</span> / <span class="pnl-neg">${px(p.stopLoss)}</span></td>
+          <td><span class="tag ${isBot ? '' : 'manual'}">${isBot ? 'bot' : 'manual'}</span></td>
+        </tr>`;
     }).join('');
   }
 
-  // Immediately fetch live prices after render
-  tickPrices();
-}
+  // ── Open orders ───────────────────────────────────────────────────────────
+  document.getElementById('ord-count').textContent = orders.length ? `(${orders.length})` : '';
+  const ob = document.getElementById('ord-body');
+  if (!orders.length) {
+    ob.innerHTML = '<tr><td colspan="9" class="empty">No open orders</td></tr>';
+  } else {
+    ob.innerHTML = orders.map(o => `
+      <tr>
+        <td>${o.symbol}</td>
+        <td>${o.orderType}</td>
+        <td class="${o.side === 'Buy' ? 'long' : 'short'}">${o.side === 'Buy' ? 'Buy' : 'Sell'}</td>
+        <td class="r">${px(o.price)}</td>
+        <td class="r">${o.filled}/${o.qty}</td>
+        <td class="r">${Number(o.orderValue) ? usd(o.orderValue) : '—'}</td>
+        <td class="r"><span class="pnl-pos">${px(o.takeProfit)}</span> / <span class="pnl-neg">${px(o.stopLoss)}</span></td>
+        <td class="ts">${fmtTime(o.createdTime)}</td>
+        <td>${o.reduceOnly ? 'Yes' : 'No'}</td>
+      </tr>`).join('');
+  }
 
-// ── Load data from the bot's /api/state endpoint ─────────────────────────────
-// The token travels in this page's own URL, so it is reused for API calls and
-// the dashboard works identically locally and on Railway.
-const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
+  // ── Bot trade history ─────────────────────────────────────────────────────
+  const cb = document.getElementById('closed-body');
+  if (!closed.length) {
+    cb.innerHTML = '<tr><td colspan="9" class="empty">No closed bot trades yet</td></tr>';
+  } else {
+    cb.innerHTML = [...closed].reverse().map(t => `
+      <tr>
+        <td>${t.symbol}</td>
+        <td>${t.timeframe || '—'}</td>
+        <td><span class="badge ${t.outcome}">${t.outcome}</span></td>
+        <td class="r">${px(t.entryPrice)}</td>
+        <td class="r">${px(t.exitPrice)}</td>
+        <td class="r">${t.pnl === null || t.pnl === undefined ? '<span class="ts">unknown</span>' : signed(t.pnl)}</td>
+        <td>${signalDots(t.signals)}</td>
+        <td class="ts">${fmtTime(t.entryTime)}</td>
+        <td class="ts">${fmtTime(t.exitTime)}</td>
+      </tr>`).join('');
+  }
+}
 
 async function reloadData() {
   const btn = document.querySelector('.refresh-btn');
   btn.classList.add('loading');
   btn.innerHTML = '<span class="spin">↻</span> Refreshing…';
-
   const status = document.getElementById('status');
+  const token  = new URLSearchParams(location.search).get('token') || '';
 
   try {
-    const qs  = AUTH_TOKEN ? `?token=${encodeURIComponent(AUTH_TOKEN)}&t=${Date.now()}` : `?t=${Date.now()}`;
+    const qs  = (token ? `?token=${encodeURIComponent(token)}&t=` : '?t=') + Date.now();
     const res = await fetch('/api/state' + qs, { cache: 'no-store' });
-
-    if (res.status === 401) {
-      status.textContent = 'unauthorised — add ?token=… to this page URL';
-      return;
-    }
-    if (!res.ok) {
-      status.textContent = `error ${res.status}`;
-      return;
-    }
-
+    if (res.status === 401) { status.textContent = 'unauthorised — add ?token=… to this page URL'; return; }
+    if (!res.ok)            { status.textContent = `error ${res.status}`; return; }
     const data = await res.json();
     render(data);
-    status.textContent = 'data ' + new Date(data.serverTime || Date.now()).toLocaleTimeString();
+    status.textContent = 'updated ' + new Date(data.serverTime || Date.now()).toLocaleTimeString();
+    document.getElementById('price-status').textContent =
+      data.live ? '· live from Bybit' : '· bot state only (Bybit unreachable)';
   } catch (e) {
     status.textContent = 'bot unreachable — is it running?';
   } finally {
@@ -327,9 +288,7 @@ async function reloadData() {
   }
 }
 
-// Data reloads every 30s, price ticks every 10s
-setInterval(reloadData, 30000);
-setInterval(tickPrices, 10000);
+setInterval(reloadData, REFRESH_MS);
 reloadData();
 </script>
 </body>

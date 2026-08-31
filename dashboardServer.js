@@ -18,7 +18,7 @@ function authorised(req) {
   return url.searchParams.get('token') === TOKEN;
 }
 
-function start(getState) {
+function start(getState, getSnapshot) {
   const port = parseInt(process.env.PORT || '8080');
 
   // Always bind 0.0.0.0. Binding loopback when no token was set made a
@@ -49,20 +49,29 @@ function start(getState) {
       return res.end('ok');
     }
 
-    // Current state as JSON
+    // Current state as JSON, plus a live snapshot of the whole account
     if (url.pathname === '/api/state') {
-      let state;
-      try {
-        state = getState();
-      } catch (e) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: e.message }));
-      }
-      res.writeHead(200, {
-        'Content-Type':  'application/json',
-        'Cache-Control': 'no-store',
-      });
-      return res.end(JSON.stringify({ ...state, serverTime: Date.now() }));
+      (async () => {
+        let state;
+        try {
+          state = getState();
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message }));
+        }
+        // Live account data is a bonus, not a precondition: if Bybit is
+        // unreachable the dashboard should still render the bot's own state.
+        let live = null;
+        if (getSnapshot) {
+          try { live = await getSnapshot(); } catch {}
+        }
+        res.writeHead(200, {
+          'Content-Type':  'application/json',
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify({ ...state, live, serverTime: Date.now() }));
+      })();
+      return;
     }
 
     // The dashboard itself
