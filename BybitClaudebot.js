@@ -491,6 +491,8 @@ async function tick() {
   state.balance        = balanceInfo.equity;
   state.walletBalance  = balanceInfo.walletBalance;
   state.unrealisedPnl  = balanceInfo.unrealisedPnl;
+  state.maxPositions   = MAX_POSITIONS;   // published so the dashboard cannot drift
+  state.leverage       = LEVERAGE;
   saveState(state);
   await printSummary(state, balanceInfo.equity);
 }
@@ -502,6 +504,9 @@ async function tick() {
   console.log(`   Risk: ${RISK_PCT*100}% per trade  |  Max ${MAX_POSITIONS} positions`);
   console.log(`   State: ${STATE_FILE}`);
   console.log('   Press Ctrl+C to stop.\n');
+
+  // Serve the dashboard so it works from a browser when running in the cloud
+  require('./dashboardServer').start(loadState);
 
   process.stdout.write('🔍 Fetching all Bybit USDT perpetuals...');
   PAIRS = await fetchAllPairs();

@@ -79,7 +79,7 @@ tr:hover td { background: #141414; }
 </section>
 
 <script>
-const MAX_POS = 10;
+let MAX_POS = 3;   // overridden by whatever the bot reports
 
 let currentData = null;
 let livePrices = {};
@@ -183,6 +183,7 @@ async function tickPrices() {
 // ── Full render from data ────────────────────────────────────────────────────
 function render(data) {
   currentData = data;
+  if (data.maxPositions) MAX_POS = data.maxPositions;
   const open   = data.openTrades   || [];
   const closed = data.closedTrades || [];
 
@@ -277,34 +278,40 @@ function render(data) {
   tickPrices();
 }
 
-// ── Load data from live_data.js ──────────────────────────────────────────────
-function reloadData() {
+// ── Load data from the bot's /api/state endpoint ─────────────────────────────
+// The token travels in this page's own URL, so it is reused for API calls and
+// the dashboard works identically locally and on Railway.
+const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
+
+async function reloadData() {
   const btn = document.querySelector('.refresh-btn');
   btn.classList.add('loading');
   btn.innerHTML = '<span class="spin">↻</span> Refreshing…';
 
-  const old = document.getElementById('data-script');
-  if (old) old.remove();
-  const s = document.createElement('script');
-  s.id = 'data-script';
-  s.src = 'live_data.js?t=' + Date.now();
-  s.onload = () => {
-    btn.classList.remove('loading');
-    btn.innerHTML = '↻ Refresh';
-    if (window.LIVE_DATA) {
-      render(window.LIVE_DATA);
-      const ts = new Date(window.LIVE_DATA_TS).toLocaleTimeString();
-      document.getElementById('status').textContent = 'data ' + ts;
-    } else {
-      document.getElementById('status').textContent = 'waiting for live_data.js...';
+  const status = document.getElementById('status');
+
+  try {
+    const qs  = AUTH_TOKEN ? `?token=${encodeURIComponent(AUTH_TOKEN)}&t=${Date.now()}` : `?t=${Date.now()}`;
+    const res = await fetch('/api/state' + qs, { cache: 'no-store' });
+
+    if (res.status === 401) {
+      status.textContent = 'unauthorised — add ?token=… to this page URL';
+      return;
     }
-  };
-  s.onerror = () => {
+    if (!res.ok) {
+      status.textContent = `error ${res.status}`;
+      return;
+    }
+
+    const data = await res.json();
+    render(data);
+    status.textContent = 'data ' + new Date(data.serverTime || Date.now()).toLocaleTimeString();
+  } catch (e) {
+    status.textContent = 'bot unreachable — is it running?';
+  } finally {
     btn.classList.remove('loading');
     btn.innerHTML = '↻ Refresh';
-    document.getElementById('status').textContent = 'live_data.js not found — run live.js first';
-  };
-  document.body.appendChild(s);
+  }
 }
 
 // Data reloads every 30s, price ticks every 10s
