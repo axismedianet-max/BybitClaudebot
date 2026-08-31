@@ -300,11 +300,19 @@ function loadState() {
 }
 
 function saveState(state) {
-  // Write to a temp file then rename. A crash partway through a direct write
-  // would leave truncated JSON and lose the trade history.
-  const tmp = STATE_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, STATE_FILE);
+  // Never let a failed write kill the bot. Losing bookkeeping is bad; dying
+  // mid-session with open positions and no supervision is worse. The position
+  // count is read from Bybit, so trading survives a broken state file.
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    // Write to a temp file then rename. A crash partway through a direct write
+    // would leave truncated JSON and lose the trade history.
+    const tmp = STATE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, STATE_FILE);
+  } catch (e) {
+    console.log(`  ⚠️  Could not save state to ${STATE_FILE}: ${e.message}`);
+  }
 }
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
@@ -577,6 +585,12 @@ async function tick() {
   console.log(`   TP: ${TAKE_PROFIT_PCT*100}%  SL: ${STOP_LOSS_PCT*100}%  MaxHold: ${MAX_HOLD_BARS} bars`);
   console.log(`   Risk: ${RISK_PCT*100}% per trade  |  Max ${MAX_POSITIONS} positions`);
   console.log(`   State: ${STATE_FILE}`);
+  // Surface a STATE_DIR that is configured but not actually mounted, rather
+  // than letting it look persistent while silently living on ephemeral disk.
+  if (process.env.STATE_DIR && !fs.existsSync(process.env.STATE_DIR)) {
+    console.log(`   ⚠️  ${process.env.STATE_DIR} does not exist — no volume is mounted there.`);
+    console.log('      It will be created, but history will be lost on redeploy.');
+  }
   console.log('   Press Ctrl+C to stop.\n');
 
   // Serve the dashboard so it works from a browser when running in the cloud
