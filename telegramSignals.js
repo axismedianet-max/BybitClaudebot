@@ -13,6 +13,8 @@ const API_HASH = process.env.TELEGRAM_API_HASH || '';
 const LEVERAGE      = 20;
 const MAX_POSITIONS = 6;    // matches BybitClaudebot.js — counted live from Bybit
 const MAX_MARGIN_PER_TRADE = 25;   // USD committed per position (not order value)
+// Kill switch — signals are still logged, but no orders are placed.
+const PAUSED = /^(1|true|yes|on)$/i.test(process.env.PAUSED || '');
 // Cap on how much of a position's margin a stop may risk. Signal channels quote
 // stops for unleveraged sizing — the FIL signal's stop sat ~9.8% from entry,
 // which at 20x is past the liquidation point and would never have fired. The
@@ -209,6 +211,11 @@ async function fetchOpenPositions() {
 async function executeTrade(sig) {
   console.log(`\n📡 Signal: ${sig.symbol} ${sig.side}  TP:${sig.takeProfit}  SL:${sig.stopLoss}`);
 
+  if (PAUSED) {
+    console.log('  ⏸️  PAUSED — signal logged, no order placed.');
+    return;
+  }
+
   // Bybit is the source of truth for how many positions are open. If this call
   // fails we skip the trade rather than risk stacking on an unknown position.
   let openSymbols;
@@ -298,7 +305,9 @@ async function executeTrade(sig) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 (async () => {
   console.log('📡 BybitClaudebot — Telegram Signal Listener');
-  console.log(`   Leverage: ${LEVERAGE}x  |  Max ${MAX_POSITIONS} positions\n`);
+  console.log(`   Leverage: ${LEVERAGE}x  |  Max ${MAX_POSITIONS} positions`);
+  if (PAUSED) console.log('   ⏸️  PAUSED — signals will be logged but no orders placed.');
+  console.log('');
 
   if (!API_ID || !API_HASH) {
     console.error('❌ TELEGRAM_API_ID / TELEGRAM_API_HASH missing from .env');

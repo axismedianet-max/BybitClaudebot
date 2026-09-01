@@ -15,6 +15,10 @@ const LEVERAGE              = 20;
 const SL_MARGIN_PCT         = 0.75;
 const STOP_LOSS_PCT         = SL_MARGIN_PCT / LEVERAGE;   // price distance
 const MAX_MARGIN_PER_TRADE  = 25;   // USD committed per position (not order value)
+// Kill switch. Blocks new entries only — existing positions keep being managed,
+// and their TP/SL live on Bybit's servers regardless. Flip the PAUSED variable
+// to stop or resume without a code change.
+const PAUSED = /^(1|true|yes|on)$/i.test(process.env.PAUSED || '');
 const SIGNAL_CANDLES        = 50;
 const RSI_PERIOD            = 14;
 const BB_PERIOD             = 20;
@@ -512,6 +516,10 @@ async function updateOpenTrades(state) {
 
 // ─── Scan for signals and place orders ────────────────────────────────────────
 async function scanSignals(state, balance) {
+  if (PAUSED) {
+    console.log('  ⏸️  PAUSED — not opening new positions (existing ones still managed)');
+    return;
+  }
   // Bybit is the source of truth for the position count, not our local state
   // file: telegramSignals.js trades the same account and its positions are
   // invisible here. Counting locally would let the two services jointly exceed
@@ -649,6 +657,7 @@ async function tick() {
   state.maxPositions   = MAX_POSITIONS;   // published so the dashboard cannot drift
   state.leverage       = LEVERAGE;
   state.stateFile      = STATE_FILE;      // so a misconfigured volume is visible
+  state.paused         = PAUSED;
   saveState(state);
   await printSummary(state, balanceInfo.equity);
 }
@@ -658,6 +667,7 @@ async function tick() {
   console.log('🚀 Live Trading Started');
   console.log(`   TP: ${TAKE_PROFIT_PCT*100}%  SL: ${STOP_LOSS_PCT*100}%  MaxHold: ${MAX_HOLD_BARS} bars`);
   console.log(`   Risk: ${RISK_PCT*100}% per trade  |  Max ${MAX_POSITIONS} positions`);
+  if (PAUSED) console.log('   ⏸️  PAUSED — no new positions will be opened.');
   console.log(`   State: ${STATE_FILE}`);
   // Surface a STATE_DIR that is configured but not actually mounted, rather
   // than letting it look persistent while silently living on ephemeral disk.
