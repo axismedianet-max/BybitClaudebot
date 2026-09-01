@@ -32,6 +32,10 @@ const ALLOWED = (process.env.TELEGRAM_ALLOWED_CHATS || '')
 // event. Compare on the bare digits so either form in the allowlist matches, and
 // a configuration that looks right cannot silently ignore every signal.
 function bareId(v) { return String(v).replace(/^-?(100)?/, ''); }
+
+// Canonical numeric ids for any @usernames in ALLOWED, filled in at startup.
+const RESOLVED_IDS = [];
+const RESOLVED_NAMES = {};
 function idMatches(chatId, allowed) {
   if (!chatId) return false;
   const bare = bareId(chatId);
@@ -335,6 +339,22 @@ async function executeTrade(sig) {
     console.log(sessionString);
     console.log('━'.repeat(70) + '\n');
   }
+  // Resolve any @usernames in the allowlist to their numeric ids up front, so
+  // matching is purely numeric at message time and does not depend on the event
+  // carrying a readable name.
+  for (const a of ALLOWED) {
+    if (/^-?\d+$/.test(a)) continue;
+    try {
+      const ent = await client.getEntity(a);
+      const id  = bareId(String(ent.id));
+      RESOLVED_IDS.push(id);
+      RESOLVED_NAMES[id] = ent.username || ent.title || a;
+      console.log(`   resolved ${a} → id ${ent.id}`);
+    } catch (e) {
+      console.log(`   ⚠️  could not resolve ${a}: ${e.message}`);
+    }
+  }
+
   if (ALLOWED.length) {
     console.log(`👂 Listening. Trading only signals from: ${ALLOWED.join(', ')}\n`);
   } else {
@@ -354,12 +374,24 @@ async function executeTrade(sig) {
     // Identify the source. A message matching the signal format can arrive from
     // any chat — including a private message from a stranger — so the sender is
     // untrusted input and must be checked before it can move money.
-    let chatId = '', chatName = '';
+    //
+    // Read the id off the message itself. getChat() returned an object with no
+    // id, username or title here, which made every signal look like it came
+    // from an unknown chat and silently blocked all of them.
+    const msgObj = event.message || {};
+    const chatId = String(
+      msgObj.chatId ??
+      msgObj.peerId?.channelId ??
+      msgObj.peerId?.chatId ??
+      msgObj.peerId?.userId ??
+      ''
+    );
+    let chatName = '';
     try {
       const chat = await event.getChat();
-      chatId   = String(chat?.id ?? '');
-      chatName = chat?.username || chat?.title || '(unnamed)';
-    } catch { chatName = '(unknown)'; }
+      chatName = chat?.username || chat?.title || '';
+    } catch {}
+    if (!chatName) chatName = RESOLVED_NAMES[bareId(chatId)] || '(unnamed)';
 
     if (!ALLOWED.length) {
       console.log(`\n👁  Observed ${sig.symbol} ${sig.side} from "${chatName}" (id ${chatId})`);
@@ -368,6 +400,7 @@ async function executeTrade(sig) {
     }
 
     const permitted = idMatches(chatId, ALLOWED) ||
+                      idMatches(chatId, RESOLVED_IDS) ||
                       ALLOWED.some(a => a.toLowerCase() === String(chatName).toLowerCase());
     if (!permitted) {
       console.log(`\n⛔ Ignored ${sig.symbol} ${sig.side} from "${chatName}" (id ${chatId}) — not an allowed chat`);
