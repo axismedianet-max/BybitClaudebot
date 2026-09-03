@@ -340,12 +340,27 @@ async function executeTrade(sig) {
     process.exit(1);
   };
 
-  await client.start({
-    phoneNumber: interactive ? async () => await input.text('📱 Phone number (with country code): ') : noPrompt('a phone number'),
-    password:    interactive ? async () => await input.text('🔐 2FA password (blank if none): ')     : noPrompt('a 2FA password'),
-    phoneCode:   interactive ? async () => await input.text('📩 Code sent to your phone: ')          : noPrompt('a login code'),
-    onError:     (err) => console.error('Auth error:', err),
-  });
+  try {
+    await client.start({
+      phoneNumber: interactive ? async () => await input.text('📱 Phone number (with country code): ') : noPrompt('a phone number'),
+      password:    interactive ? async () => await input.text('🔐 2FA password (blank if none): ')     : noPrompt('a 2FA password'),
+      phoneCode:   interactive ? async () => await input.text('📩 Code sent to your phone: ')          : noPrompt('a login code'),
+      onError:     (err) => console.error('Auth error:', err),
+    });
+  } catch (e) {
+    const msg = e?.errorMessage || e?.message || String(e);
+    if (/AUTH_KEY_DUPLICATED/i.test(msg)) {
+      console.error('\n❌ TELEGRAM_SESSION is dead: AUTH_KEY_DUPLICATED.');
+      console.error('   Telegram invalidates a session when the same key connects from');
+      console.error('   two places at once — typically running this listener locally while');
+      console.error('   the cloud deploy is also running.');
+      console.error('\n   Fix: run `node login.js` locally to mint a new session, set it as');
+      console.error('   TELEGRAM_SESSION here, and use it in one place only.\n');
+    } else {
+      console.error('\n❌ Telegram login failed:', msg, '\n');
+    }
+    process.exit(1);
+  }
 
   const sessionString = client.session.save();
   saveSession(sessionString);
