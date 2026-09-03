@@ -56,6 +56,37 @@ td.r { text-align: right; font-variant-numeric: tabular-nums; }
 .alert.show { display: block; }
 .blink { animation: blink 0.3s ease; }
 @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+/* Phone layout. The dashboard is served from Railway and checked from a phone
+   as often as a desktop, so narrow screens are a first-class case rather than
+   an afterthought. Wide tables keep their horizontal scroll — the columns are
+   Bybit's and dropping any of them would lose information — but everything
+   above them is arranged to be readable without zooming. */
+@media (max-width: 640px) {
+  body { padding: 10px; font-size: 13px; }
+  h1 { font-size: 16px; }
+  .header-row { flex-wrap: wrap; gap: 8px; row-gap: 4px; }
+  #status, #price-status { font-size: 10px; }
+  .subtitle { font-size: 11px; margin-bottom: 14px; }
+
+  /* Two even columns instead of min-width cards overflowing the viewport */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card { min-width: 0; padding: 10px 12px; }
+  .card .label { font-size: 9px; letter-spacing: 0.5px; }
+  .card .value { font-size: 17px; }
+
+  section { margin-bottom: 20px; }
+  section h2 { font-size: 11px; }
+  th { font-size: 9px; padding: 5px 7px; }
+  td { font-size: 11px; padding: 6px 7px; }
+
+  /* Make it obvious the tables scroll sideways rather than look truncated */
+  .scroll { -webkit-overflow-scrolling: touch; }
+  .scroll::after {
+    content: '← swipe →'; display: block; text-align: right;
+    color: #333; font-size: 9px; padding: 4px 2px 0;
+  }
+}
 </style>
 </head>
 <body>
