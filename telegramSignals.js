@@ -10,7 +10,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 // ─── Config ───────────────────────────────────────────────────────────────────
 const API_ID   = parseInt(process.env.TELEGRAM_API_ID || '0');
 const API_HASH = process.env.TELEGRAM_API_HASH || '';
-const LEVERAGE      = 20;
+const LEVERAGE      = 50;
 const MAX_POSITIONS = 6;    // matches BybitClaudebot.js — counted live from Bybit
 const MAX_MARGIN_PER_TRADE = 25;   // USD committed per position (not order value)
 // Kill switch — signals are still logged, but no orders are placed.

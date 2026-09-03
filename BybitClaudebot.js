@@ -9,7 +9,7 @@ const TIMEFRAMES            = ['15', '60'];
 const RISK_PCT              = 0.05;   // 5% of balance per trade
 const TAKE_PROFIT_PCT       = 0.10;
 const MAX_POSITIONS         = 6;
-const LEVERAGE              = 20;
+const LEVERAGE              = 50;
 // Stop when this fraction of the position's margin is gone. Expressed against
 // margin rather than price so it scales with leverage: a fixed price stop that
 // is safe at 5x sits beyond the liquidation point at 20x and never fires.
