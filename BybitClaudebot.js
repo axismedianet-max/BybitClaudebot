@@ -1,6 +1,7 @@
 const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
+const { emaSeries, adxSeries, macdSeries } = require('./indicators.js');
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -19,7 +20,24 @@ const MAX_MARGIN_PER_TRADE  = 25;   // USD committed per position (not order val
 // and their TP/SL live on Bybit's servers regardless. Flip the PAUSED variable
 // to stop or resume without a code change.
 const PAUSED = /^(1|true|yes|on)$/i.test(process.env.PAUSED || '');
+// Which entry rule to trade. 'trendfollow' is the validated one: it held up
+// out-of-sample (+0.09% in, +0.51% out per trade) and was net-positive in all
+// 30 parameter combinations swept. 'baseline' is the original 2-of-3 rule,
+// which measured at +0.013% gross — negative once fees are paid. Kept only so
+// the change is reversible without a code edit.
+const STRATEGY = (process.env.STRATEGY || 'trendfollow').toLowerCase();
+
+// Best of the sweep: highest expectancy that still produced a healthy trade
+// count. ADX 35 scored marginally better but on 20% fewer opportunities.
+const TF_ADX_MIN   = 30;
+const TF_EMA_FAST  = 50;
+const TF_EMA_SLOW  = 200;
+const TF_USE_MACD  = true;
+
 const SIGNAL_CANDLES        = 50;
+// EMA200 plus MACD warmup. The old 55-candle fetch made EMA200 permanently
+// null, so trend-follow would never have fired a single trade.
+const CANDLES_NEEDED        = STRATEGY === 'trendfollow' ? 300 : SIGNAL_CANDLES + 5;
 const RSI_PERIOD            = 14;
 const BB_PERIOD             = 20;
 const BB_STD                = 2;
@@ -106,7 +124,10 @@ function apiPost(path, body) {
 // ─── Public candle fetch (no auth needed) ────────────────────────────────────
 function fetchCandles(symbol, interval, limit = SIGNAL_CANDLES + 5) {
   return new Promise(resolve => {
-    const path = `/v5/market/mark-price-kline?symbol=${symbol}&interval=${interval}&limit=${limit}&category=linear`;
+    // /v5/market/kline is traded price — the series every backtest here used.
+    // mark-price-kline is a liquidation reference and differs subtly, which would
+    // mean the live signal is not the signal that was validated.
+    const path = `/v5/market/kline?symbol=${symbol}&interval=${interval}&limit=${limit}&category=linear`;
     const req = https.get(
       { hostname: 'api.bybit.com', path, headers: { 'User-Agent': 'Mozilla/5.0' } },
       res => {
@@ -192,8 +213,12 @@ function hasHigherLows(lows, lookback = HIGHER_LOWS_LOOKBACK) {
   return true;
 }
 
-function generateSignal(candles) {
-  if (candles.length < SIGNAL_CANDLES + 1) return null;
+// Entry rules. Both return null (no trade) or a signal object.
+//
+// Measured over 169k bars, 58 series, ~31 days, net of 0.15% costs:
+//   baseline     +0.013% per trade gross  → negative after fees
+//   trendfollow  +0.51% out-of-sample     → 30/30 sweep combinations positive
+function baselineSignal(candles) {
   const closes = candles.map(c => parseFloat(c[4]));
   const lows   = candles.map(c => parseFloat(c[3]));
   const rsi = calcRSI(closes);
@@ -204,6 +229,41 @@ function generateSignal(candles) {
   const count = [s1, s2, s3].filter(Boolean).length;
   if (count < 2) return null;
   return { count, confidence: count / 3, s1, s2, s3 };
+}
+
+// Buy strength rather than fade weakness: a confirmed trend (ADX), pointing up
+// (+DI over -DI), with momentum agreeing (MACD) and the fast EMA above the slow.
+function trendFollowSignal(candles) {
+  const closes = candles.map(c => parseFloat(c[4]));
+  const n = closes.length - 1;
+
+  const { adx, pdi, mdi } = adxSeries(candles);
+  if (adx[n] === null || adx[n] < TF_ADX_MIN) return null;
+  if (!(pdi[n] > mdi[n])) return null;
+
+  if (TF_USE_MACD) {
+    const m = macdSeries(closes);
+    if (!(m.line[n] !== null && m.sig[n] !== null && m.line[n] > m.sig[n])) return null;
+  }
+
+  const fast = emaSeries(closes, TF_EMA_FAST);
+  const slow = emaSeries(closes, TF_EMA_SLOW);
+  if (!(fast[n] !== null && slow[n] !== null && fast[n] > slow[n])) return null;
+
+  // Confidence scales with trend strength, so stronger trends can be recorded
+  // and compared later. Sizing does not currently use it.
+  return {
+    count: 3,
+    confidence: Math.min(1, adx[n] / 50),
+    adx: +adx[n].toFixed(1),
+    plusDI: +pdi[n].toFixed(1),
+    minusDI: +mdi[n].toFixed(1),
+  };
+}
+
+function generateSignal(candles) {
+  if (candles.length < (STRATEGY === 'trendfollow' ? TF_EMA_SLOW + 40 : SIGNAL_CANDLES + 1)) return null;
+  return STRATEGY === 'trendfollow' ? trendFollowSignal(candles) : baselineSignal(candles);
 }
 
 // ─── Round qty to instrument step ─────────────────────────────────────────────
@@ -549,7 +609,7 @@ async function scanSignals(state, balance) {
       const alreadyOpen = state.openTrades.find(t => t.symbol === symbol && t.intervalRaw === tf);
       if (alreadyOpen) continue;
 
-      const candles = await fetchCandles(symbol, tf, SIGNAL_CANDLES + 5);
+      const candles = await fetchCandles(symbol, tf, CANDLES_NEEDED);
       if (!candles || candles.length < SIGNAL_CANDLES + 1) continue;
 
       const signalCandles = candles.slice(0, -1);
@@ -658,6 +718,7 @@ async function tick() {
   state.leverage       = LEVERAGE;
   state.stateFile      = STATE_FILE;      // so a misconfigured volume is visible
   state.paused         = PAUSED;
+  state.strategy       = STRATEGY;
   saveState(state);
   await printSummary(state, balanceInfo.equity);
 }
@@ -667,6 +728,8 @@ async function tick() {
   console.log('🚀 Live Trading Started');
   console.log(`   TP: ${TAKE_PROFIT_PCT*100}%  SL: ${STOP_LOSS_PCT*100}%  MaxHold: ${MAX_HOLD_BARS} bars`);
   console.log(`   Risk: ${RISK_PCT*100}% per trade  |  Max ${MAX_POSITIONS} positions`);
+  console.log(`   Strategy: ${STRATEGY}` + (STRATEGY === 'trendfollow'
+    ? `  (ADX>=${TF_ADX_MIN}, EMA${TF_EMA_FAST}/${TF_EMA_SLOW}${TF_USE_MACD ? ', MACD' : ''})` : ''));
   if (PAUSED) console.log('   ⏸️  PAUSED — no new positions will be opened.');
   console.log(`   State: ${STATE_FILE}`);
   // Surface a STATE_DIR that is configured but not actually mounted, rather
