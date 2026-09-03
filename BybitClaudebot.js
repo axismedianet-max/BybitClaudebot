@@ -27,6 +27,12 @@ const PAUSED = /^(1|true|yes|on)$/i.test(process.env.PAUSED || '');
 // the change is reversible without a code edit.
 const STRATEGY = (process.env.STRATEGY || 'trendfollow').toLowerCase();
 
+// Restrict the universe. Empty means every USDT pair. Note that narrowing this
+// also narrows the evidence: the measured edge came from many series, and a
+// single symbol produces too few trades to judge over any short period.
+const SYMBOLS = (process.env.SYMBOLS || '')
+  .split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+
 // Best of the sweep: highest expectancy that still produced a healthy trade
 // count. ADX 35 scored marginally better but on 20% fewer opportunities.
 const TF_ADX_MIN   = 30;
@@ -719,6 +725,7 @@ async function tick() {
   state.stateFile      = STATE_FILE;      // so a misconfigured volume is visible
   state.paused         = PAUSED;
   state.strategy       = STRATEGY;
+  state.symbols        = SYMBOLS.length ? SYMBOLS : null;
   saveState(state);
   await printSummary(state, balanceInfo.equity);
 }
@@ -745,7 +752,14 @@ async function tick() {
 
   process.stdout.write('🔍 Fetching all Bybit USDT perpetuals...');
   PAIRS = await fetchAllPairs();
-  console.log(` ${PAIRS.length} pairs found.\n`);
+  if (SYMBOLS.length) {
+    const before = PAIRS.length;
+    PAIRS = PAIRS.filter(p => SYMBOLS.includes(p));
+    console.log(` ${before} found, restricted to ${PAIRS.length}: ${PAIRS.join(', ')}\n`);
+    if (!PAIRS.length) console.log('   ⚠️  SYMBOLS matched nothing — no pairs to scan.\n');
+  } else {
+    console.log(` ${PAIRS.length} pairs found.\n`);
+  }
 
   // Verify API works. Deliberately non-fatal: exiting here would take the
   // dashboard down with it and leave Railway crash-looping with no way to see
@@ -768,6 +782,6 @@ async function tick() {
 
   setInterval(async () => {
     const updated = await fetchAllPairs();
-    if (updated.length > 0) PAIRS = updated;
+    if (updated.length > 0) PAIRS = SYMBOLS.length ? updated.filter(p => SYMBOLS.includes(p)) : updated;
   }, 60 * 60 * 1000);
 })();
